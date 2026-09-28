@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+# Generated race plots. Cheap to regenerate with run_demo.py, and binary churn in
+# a repo whose whole point is the model that produces them.
+out/*.png
