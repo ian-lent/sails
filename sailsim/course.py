@@ -44,6 +44,10 @@ class Course:
     name: str = "W/L"
 
     @property
+    def line_length_m(self) -> float:
+        return geo.distance(*self.start_pin, *self.start_boat)
+
+    @property
     def leg_count(self) -> int:
         return len(self.marks)
 
@@ -71,6 +75,7 @@ class Course:
         laps: int = 2,
         line_length_m: float = 140.0,
         wind_from: float = 0.0,
+        line_bias_deg: float = 0.0,
     ) -> "Course":
         """Size the beat so the upwind leg takes about `upwind_minutes`.
 
@@ -85,7 +90,7 @@ class Course:
         """
         _, vmg_kt = polar.best_upwind(tws_kt)
         beat = geo.ms(vmg_kt) * upwind_minutes * 60.0
-        return Course.windward_leeward(beat, laps, line_length_m, wind_from)
+        return Course.windward_leeward(beat, laps, line_length_m, wind_from, line_bias_deg)
 
     @staticmethod
     def windward_leeward(
@@ -93,6 +98,7 @@ class Course:
         laps: int = 2,
         line_length_m: float = 140.0,
         wind_from: float = 0.0,
+        line_bias_deg: float = 0.0,
     ) -> "Course":
         """A W/L course built square to the wind.
 
@@ -114,11 +120,15 @@ class Course:
                 marks.append(Mark(f"leeward-{lap + 1}", 0.0, 0.0))
         marks.append(Mark("finish", 0.0, 0.0, radius_m=12.0))
 
+        # The line is rotated about its midpoint by the bias. Positive bias puts the
+        # PIN upwind, matching start.line_bias's sign convention.
         half = line_length_m / 2.0
+        axis = math.radians(wind_from + 90.0 + line_bias_deg)
+        ax, ay = math.sin(axis), math.cos(axis)
         return Course(
             marks=tuple(marks),
-            start_boat=(px * half, py * half),
-            start_pin=(-px * half, -py * half),
+            start_boat=(ax * half, ay * half),
+            start_pin=(-ax * half, -ay * half),
         )
 
 

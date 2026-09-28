@@ -146,6 +146,17 @@ class Boat:
     dirty_air_s: float = 0.0
     dirty_air_integral: float = 0.0
     worst_deficit: float = 0.0
+    # Start bookkeeping. `ocs` records that the boat was over at the gun; it stays
+    # true after the boat has returned, because the penalty is the time it cost and
+    # that must remain visible in the results.
+    ocs: bool = False
+    returning: bool = False
+    start_side_m: float = 0.0
+    # Position along the line at the gun: 0 at the pin, 1 at the committee boat.
+    start_fraction: float = 0.5
+    start_speed_kt: float = 0.0
+    # Imposed during the pre-start when a boat is holding back. None means "sail".
+    speed_cap_kt: float | None = None
     distance_sailed_m: float = 0.0
     track: list[tuple[float, float, float]] = field(default_factory=list)
 
@@ -212,6 +223,8 @@ class Boat:
         # manoeuvres: a boat coming out of a lull does not snap to speed, and
         # acceleration off the start line is most of why the first thirty seconds
         # of a race decide so much.
+        if self.speed_cap_kt is not None:
+            target = min(target, self.speed_cap_kt)
         accel_tau = self.accel_tau_s if target > self.speed_kt else 2.0
         self.speed_kt += (target - self.speed_kt) * (1.0 - math.exp(-dt / accel_tau))
         effective = max(0.0, self.speed_kt)

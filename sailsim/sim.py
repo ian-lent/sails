@@ -30,6 +30,9 @@ from . import geometry as geo
 from .boat import Boat
 from .course import Course, Helm
 from .interaction import Disturbance, FleetWind
+from . import start as start_mod
+import math
+
 from .polar import CLASSES, Polar
 from .wind import WindField
 
@@ -49,6 +52,9 @@ class RaceResult:
     polar_name: str
     estimates_used: list[str]
     boats: list[Boat] = field(repr=False, default_factory=list)
+    bias: "start_mod.LineBias | None" = None
+    favoured_end: str | None = None
+    ocs_count: int = 0
 
     def finishers(self) -> int:
         return sum(1 for _, _, t in self.order if t is not None)
@@ -120,6 +126,15 @@ class Simulator:
     dt: float = 0.5
     max_time_s: float = 2400.0
     record_every_s: float = 5.0
+    # Length of the starting sequence. Zero skips it entirely and drops boats onto
+    # the line at speed, which is the control case for measuring what the start is
+    # worth. College sequences are longer than this; 90 s is the part where
+    # positioning actually decides anything.
+    prestart_s: float = 90.0
+    start_seed: int = 17
+    # How hard the fleet crowds the favoured end. Zero spreads boats evenly, which
+    # is what isolates the line's advantage from the dirty air that crowding causes.
+    start_crowding: float = 0.65
     # None disables boat-on-boat interaction entirely, which is the control case:
     # any claim that dirty air caused something should be checked by running the
     # same race with this off.
@@ -138,16 +153,43 @@ class Simulator:
                 return Helm(tack_bias=(b.boat_id % 5 - 2) / 2.0)
         helms = {b.boat_id: helm_factory(b) for b in boats}
 
-        # Point every boat close-hauled on starboard and give it way on. Not a
-        # start: a start is a separate model. This just avoids the first ten
-        # seconds being boats accelerating from rest in a random direction.
         tws0, wdir0 = self.wind.at(0.0, 0.0, 0.0)
         close_hauled, _ = boats[0].polar.best_upwind(tws0)
-        for b in boats:
-            b.heading = geo.heading_for_twa(close_hauled, wdir0)
-            b.speed_kt = b.target_speed_kt(tws0, wdir0) * 0.9
+        pin, line_boat = self.course.start_pin, self.course.start_boat
 
-        t = 0.0
+        plans: dict[int, start_mod.StartPlan] = {}
+        if self.prestart_s > 0.0:
+            rng = random.Random(self.start_seed)
+            plans = start_mod.draw_plans(
+                boats, pin, line_boat, wdir0, rng, crowding=self.start_crowding
+            )
+            for b in boats:
+                # Heading FIRST. target_speed_kt reads the boat's current heading,
+                # and a freshly built boat is heading 000 — which against a
+                # northerly is dead head to wind, so the polar returns zero and the
+                # fleet gets placed exactly ON the line instead of below it. Every
+                # boat was then over at the gun, which read as a broken controller
+                # and was a broken initialisation.
+                b.heading = geo.heading_for_twa(close_hauled, wdir0)
+                full_kt = b.target_speed_kt(tws0, wdir0)
+                b.speed_kt = full_kt * rng.uniform(0.4, 0.9)
+
+                target = plans[b.boat_id].target_point(pin, line_boat)
+                # Scatter the fleet below the line, roughly a sequence's run away.
+                # Bunched rather than strung out: by the last ninety seconds a fleet
+                # is jockeying near the line, not spread over a minute of sailing.
+                back = rng.uniform(0.30, 0.60) * self.prestart_s * geo.ms(full_kt)
+                rad = math.radians(wdir0)
+                b.x = target[0] - math.sin(rad) * back + rng.gauss(0.0, 8.0)
+                b.y = target[1] - math.cos(rad) * back + rng.gauss(0.0, 8.0)
+        else:
+            # Control case: everyone on the line at speed, no sequence.
+            for b in boats:
+                b.heading = geo.heading_for_twa(close_hauled, wdir0)
+                b.speed_kt = b.target_speed_kt(tws0, wdir0) * 0.9
+
+        gun_checked = False
+        t = -self.prestart_s
         next_record = 0.0
         while t < self.max_time_s:
             if all(b.finished_at is not None for b in boats):
@@ -170,6 +212,32 @@ class Simulator:
                         b.dirty_air_s += self.dt
                         b.dirty_air_integral += deficit * self.dt
                         b.worst_deficit = max(b.worst_deficit, deficit)
+                if t < 0.0 and plans:
+                    # Pre-start: approach the chosen slot, regulating speed.
+                    heading, cap = start_mod.approach_command(
+                        b, plans[b.boat_id], pin, line_boat, tws, wdir, -t
+                    )
+                    b.speed_cap_kt = cap
+                    b.step(heading, tws, wdir, self.dt)
+                    if recording:
+                        b.record(t)
+                    continue
+
+                b.speed_cap_kt = None
+                if b.returning:
+                    # Sail back below the line before racing. The penalty is the
+                    # time this costs, not a number added at the end — which is
+                    # what makes being over early expensive in the right way.
+                    if start_mod.line_side(pin, line_boat, b.x, b.y, wdir) < -2.0:
+                        b.returning = False
+                    else:
+                        rad = math.radians(wdir)
+                        heading = geo.wrap360(math.degrees(math.atan2(-math.sin(rad), -math.cos(rad))))
+                        b.step(heading, tws, wdir, self.dt)
+                        if recording:
+                            b.record(t)
+                        continue
+
                 mark = self.course.target_mark(b)
                 if mark is None:
                     continue
@@ -180,6 +248,19 @@ class Simulator:
                 self.course.update_progress(b, t)
                 if recording:
                     b.record(t)
+            # No sequence means no gun and no OCS: boats were placed on the line
+            # at speed, so flagging them over would be an artefact of the setup.
+            if not gun_checked and t >= 0.0 and plans:
+                gun_checked = True
+                _, gun_dir = self.wind.at(0.0, 0.0, 0.0)
+                for b in boats:
+                    b.start_side_m = start_mod.line_side(pin, line_boat, b.x, b.y, gun_dir)
+                    b.start_fraction = start_mod.line_fraction(pin, line_boat, b.x, b.y)
+                    b.start_speed_kt = b.speed_kt
+                    if b.start_side_m > 0.0:
+                        b.ocs = True
+                        b.returning = True
+
             if recording:
                 next_record += self.record_every_s
             t += self.dt
@@ -193,6 +274,8 @@ class Simulator:
 
         ordered = sorted(boats, key=key)
         estimates = []
+        if self.prestart_s > 0.0:
+            estimates.append("start timing errors and line bias are drawn, not observed")
         if self.interaction is not None:
             estimates.append("wind shadow and backwind magnitudes are estimated, not measured")
         if not self.wind.is_measured:
@@ -200,7 +283,11 @@ class Simulator:
         if not boats[0].polar.is_measured:
             estimates.append(f"polar '{boats[0].polar.name}': {boats[0].polar.source}")
 
+        measured = start_mod.line_bias(pin, line_boat, wdir0)
         return RaceResult(
+            bias=start_mod.LineBias(measured, float("nan"), float("nan")),
+            favoured_end=start_mod.favoured_end(pin, line_boat, wdir0),
+            ocs_count=sum(1 for b in boats if b.ocs),
             order=[(b.boat_id, b.name, b.finished_at) for b in ordered],
             elapsed_s=t,
             wind_name=self.wind.name,

@@ -6,6 +6,7 @@ venue. **Nothing here is calibrated to real data yet** — see Provenance.
 
     python3 tests/test_core.py        # spine: geometry, polar, manoeuvres, course
     python3 tests/test_interaction.py # shadow, backwind, lanes
+    python3 tests/test_start.py       # line bias, the approach, OCS
     python3 plot_shadow.py            # draw the disturbance field
     python3 run_demo.py               # 18 boats, oscillating wind, writes a plot
     python3 run_demo.py uniform 12    # steady 12 kt
@@ -20,6 +21,7 @@ venue. **Nothing here is calibrated to real data yet** — see Provenance.
 | `wind.py` | Wind field interface: uniform, oscillating, persistent. Swappable by design. |
 | `boat.py` | Agent state, kinematics, and the manoeuvre-cost model. |
 | `interaction.py` | Wind shadow, backwind, and lane quality. Boats disturbing each other. |
+| `start.py` | Line bias, the pre-start approach, and being over early. |
 | `course.py` | Marks, legs, splits, and `Helm` — the policy layer that gets replaced. |
 | `sim.py` | The fleet loop. Takes a `helm_factory` so policies can be swapped. |
 
@@ -57,6 +59,42 @@ climatology and destroys exactly the shift structure strategy consists of. Closi
 that gap needs high-rate anemometry on station, or inference from GPS tracks, or a
 physical model of the river. See the `wind.py` docstring.
 
+## The start
+
+The line carries a bias drawn per race, magnitude **1–15 degrees**, from two
+sources modelled separately because they behave differently:
+
+* **Committee error** is fixed — the line is laid by eye off a boat swinging on
+  its anchor. Once read, it stays read.
+* **Wind shift since the line was laid** is not. On a shifty river it can exceed
+  the committee's error several times over, and it is the half that punishes
+  reading the line early and not looking again.
+
+Why it matters: eight degrees on a 140 m line puts one end **19 m — about 4.6 boat
+lengths — upwind** of the other, handed out free at the gun.
+
+The sequence has two phases. Boats hold station below the line with no way on
+(luffing needs no special case — the polar already returns zero speed inside the
+no-go zone), then bear away and accelerate at a lead time computed from how far
+below the line they are. The crew's error is in *when* they start that approach:
+early risks being over, late means starting in a hole. Acceleration lag does the
+rest, so a boat that goes late is still slow at the gun even if it is on the line.
+
+Boats over at the gun are OCS and must sail back below the line before racing.
+**The penalty is the time that costs, not a number added at the end.**
+
+Measured behaviour: ~1 boat over per 18-boat race, median boat about two lengths
+below the line at the gun, gun speeds ranging from zero (a blown start) to full.
+Starting near the favoured end is worth **+0.62 places** on average over 14 races.
+
+That number is lower than sailing intuition suggests for a 29 m advantage, and the
+likely reasons are all model limitations worth knowing: boats do not fight for the
+favoured end, the helm does not use the advantage strategically, and crew speed
+variance is large relative to it. A good calibration target.
+
+`Simulator(prestart_s=0)` skips the sequence entirely — the control case for
+measuring what the start is worth.
+
 ## Calibration encoded as tests
 
 Domain knowledge lives in `tests/test_core.py` as assertions rather than comments:
@@ -67,6 +105,10 @@ Domain knowledge lives in `tests/test_core.py` as assertions rather than comment
 * **Sailing efficiency** — the fleet must not beat the tacking geometry, nor sail
   more than 12% over it.
 * **Manoeuvre count** — a regression guard against the bug below.
+* **Line bias** — that a line set at N degrees measures N, that the favoured end
+  is the upwind one, that the advantage matches `L·sin(θ)`, and that a wind shift
+  can reverse which end is favoured.
+* **The favoured end pays**, with a margin rather than a bare inequality.
 * **Shadow geometry** — that it trails aft and to leeward, that the windward lane
   is clear, that backwind heads a boat on the same tack, and that port mirrors
   starboard exactly.
@@ -86,3 +128,16 @@ Domain knowledge lives in `tests/test_core.py` as assertions rather than comment
   was detected on every timestep of the turn. A helm knows when it decided to tack.
 * **730 m default beat.** Gave a 7.9-minute leg, outside the specified window, and
   a 27-minute race. Now sized from the polar for a target leg duration.
+* **The whole fleet OCS by 45–95 m.** The first approach controller regulated speed
+  against distance to a target *point* while always steering close-hauled, so boats
+  sailed straight through the line. Distance below the *line*, along the wind axis,
+  is what decides whether a boat is over.
+* **Every boat placed on the line instead of below it.** `back` was computed from
+  `target_speed_kt` before the boat's heading was set, and a fresh boat heads 000 —
+  dead head to wind against a northerly — so the polar returned zero. It read as a
+  broken controller and was a broken initialisation.
+* **The favoured end worth exactly nothing.** `line_side` measured from the line's
+  *midpoint* along the wind axis, so on a biased line a boat at the favoured end
+  read as already over and the controller held it back, neutralising the advantage
+  for precisely the boats trying to use it. Found because a null result there is
+  absurd, not because anything crashed.
