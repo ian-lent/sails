@@ -8,6 +8,8 @@ venue. **Nothing here is calibrated to real data yet** — see Provenance.
     python3 tests/test_interaction.py # shadow, backwind, lanes
     python3 tests/test_start.py       # line bias, the approach, OCS
     python3 tests/test_rules.py       # right of way, mark-room, penalties
+    python3 tests/test_policy.py      # the tactical helm
+    python3 experiments/shift_threshold.py   # when is a shift worth a tack?
     python3 plot_shadow.py            # draw the disturbance field
     python3 run_demo.py               # 18 boats, oscillating wind, writes a plot
     python3 run_demo.py uniform 12    # steady 12 kt
@@ -24,6 +26,7 @@ venue. **Nothing here is calibrated to real data yet** — see Provenance.
 | `interaction.py` | Wind shadow, backwind, and lane quality. Boats disturbing each other. |
 | `start.py` | Line bias, the pre-start approach, and being over early. |
 | `rules.py` | RRS Part 2: right of way, mark-room, contact, penalties. |
+| `policy.py` | The tactical helm: tacks on shifts, works to keep its air clear. |
 | `course.py` | Marks, legs, splits, and `Helm` — the policy layer that gets replaced. |
 | `sim.py` | The fleet loop. Takes a `helm_factory` so policies can be swapped. |
 
@@ -120,6 +123,61 @@ bound**.
 `Simulator(rules=False)` disables enforcement and the run says so loudly in its
 provenance. A policy search must never be run against it.
 
+## The policy layer
+
+`course.Helm` is the blind baseline — laylines only, ignores the fleet. It stays,
+because it is the control. `policy.TacticalHelm` is the thing a search tunes, and
+every decision it makes is governed by a named parameter rather than a constant
+buried in a branch: the point of the project is decision rules a sailor can carry
+onto the water, and a policy whose behaviour cannot be stated in a sentence cannot
+produce one.
+
+**One idea does the work.** Every tack and gybe decision reduces to: *which tack
+points closer to the mark?* That single comparison is "tack on the headers" in an
+oscillating breeze, "sail the long tack" when you are off to one side, and the
+correct rule downwind with no modification — because a shift that heads you on a
+beat lifts you on a run, and the geometry handles it.
+
+**Plus one condition that turned out to matter more than the threshold.** A
+tactical tack must be justified by an actual header against a running mean of the
+wind, not by geometry alone. Without it, the favoured tack flips as the boat
+crosses the rhumb line, so it tacks, overshoots, and tacks back: **26 manoeuvres in
+a breeze with no shifts in it at all**. With it, a steady breeze produces 8 — the
+layline-only figure. The running mean is a circular average (the mean of 350° and
+10° is 0°, not 180°), and its time constant is a strategy choice, not a sensor
+setting: too short and nothing reads as a shift, too long and a persistent trend
+reads as a header for minutes.
+
+### Result: when is a shift worth a tack?
+
+`experiments/shift_threshold.py` sweeps the threshold over ten wind phases with a
+**single boat** — no fleet, no dirty air, no rules — because the question is about
+the wind and the cost of tacking, and traffic would contaminate it.
+
+| | 10 kt | 18 kt |
+|---|---|---|
+| Never tack tactically | 1181 s | 1090 s |
+| Threshold 55° (misses real shifts) | 1170 s | 1097 s |
+| **Responsive (0–30°)** | **1117–1127 s** | **1046–1057 s** |
+
+**The robust finding is that ignoring shifts costs 50–80 seconds over two laps.**
+The exact threshold is second-order: the curve is flat from about 0° to 30°, and
+differences inside that band are a few seconds against a standard deviation of
+five or more. An earlier draft claimed the optimum rises with wind speed; the
+measurement after the header requirement says otherwise, and the claim is gone
+rather than tuned until it passed.
+
+### Head to head
+
+Mixed fleet, crew speed equalised so **only policy differs**, dirty air and rules
+on, 20 races: tactical **7.56** vs baseline **9.44** mean finish rank — a gap of
+**+1.89 ± 0.54 places (about 3.5σ)**.
+
+Worth knowing how that number moved. Before tactical tacks required a header, the
+same comparison gave **+0.35 ± 0.61** — indistinguishable from zero, because the
+policy was tacking away its own gains. One condition took it from noise to a solid
+effect.
+
 ## Calibration encoded as tests
 
 Domain knowledge lives in `tests/test_core.py` as assertions rather than comments:
@@ -136,6 +194,9 @@ Domain knowledge lives in `tests/test_core.py` as assertions rather than comment
 * **The favoured end pays**, with a margin rather than a bare inequality.
 * **Right of way** — every determination above, in explicit geometry, plus
   precedence (rule 10 outranks overlap; rule 13 outranks rule 11).
+* **The shift-threshold curve** — that ignoring shifts is expensive and that a
+  threshold high enough to miss real shifts also loses. The flat middle of the
+  curve is deliberately *not* asserted.
 * **Shadow geometry** — that it trails aft and to leeward, that the windward lane
   is clear, that backwind heads a boat on the same tack, and that port mirrors
   starboard exactly.
@@ -172,6 +233,13 @@ Domain knowledge lives in `tests/test_core.py` as assertions rather than comment
   is only true when nothing can intervene; switching rules on by default duly made
   things intervene and broke assertions that were right about physics and silent
   about their assumptions. Each now sets its own world explicitly.
+* **A policy that tacked away its own gains.** "Sail the tack pointing closer to
+  the mark" is correct, and near the rhumb line the answer flips every few seconds.
+  With a default threshold of 8° it made 40 manoeuvres in steady wind, and its
+  head-to-head advantage measured as noise. Requiring an actual header fixed both.
+* **An assertion that was right to refuse.** An earlier draft declined to claim
+  the tactical helm beat the baseline, because at the time it measured +0.35 ± 0.61.
+  It became assertable only after the model changed, not after the test was retried.
 * **A vacuous assertion.** `check(..., R.hulls_touching(a, b) or True)` passes
   forever. Worse than no test.
 * **The favoured end worth exactly nothing.** `line_side` measured from the line's

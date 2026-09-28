@@ -302,6 +302,7 @@ class Simulator:
                 if b.contact_cooldown_s > 0.0:
                     b.contact_cooldown_s -= self.dt
                 tws, wdir = self.wind.at(b.x, b.y, t)
+                deficit = 0.0
                 if fleet_wind is not None:
                     tws, wdir, deficit = fleet_wind.at(b, tws, wdir)
                     if deficit > 0.01:
@@ -364,7 +365,9 @@ class Simulator:
                 mark = self.course.target_mark(b)
                 if mark is None:
                     continue
-                heading, maneuver = helms[b.boat_id].target_heading(b, mark.x, mark.y, tws, wdir)
+                heading, maneuver = helms[b.boat_id].target_heading(
+                    b, mark.x, mark.y, tws, wdir, t, deficit
+                )
                 # Keeping clear overrides the helm: the obligation is not optional,
                 # and a policy that ignored it would simply be sailing illegally.
                 override, cap = commands.get(b.boat_id, (None, None))

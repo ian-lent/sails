@@ -103,18 +103,24 @@ class OscillatingWind:
     gust_factor: float = 0.15
     gust_period_s: float = 95.0
     spatial_wavelength_m: float = 0.0
+    # Shifts the oscillation in time. A race that starts on a lift and one that
+    # starts on a header are different races, so a sweep that does not vary this is
+    # measuring one realisation of the wind and calling it the wind.
+    phase_s: float = 0.0
     name: str = "oscillating"
     is_measured: bool = False
 
     def at(self, x: float, y: float, t: float) -> tuple[float, float]:
-        phase = 2.0 * math.pi * t / self.period_s
+        phase = 2.0 * math.pi * (t + self.phase_s) / self.period_s
         if self.spatial_wavelength_m > 0.0:
             # Phase advances across the course, so one side leads the other.
             phase += 2.0 * math.pi * x / self.spatial_wavelength_m
         direction = self.mean_direction + self.amplitude_deg * math.sin(phase)
         # Deliberately a different period from the shift, so speed and direction
         # do not move in lockstep and produce a spuriously simple world.
-        gust = 1.0 + self.gust_factor * math.sin(2.0 * math.pi * t / self.gust_period_s)
+        gust = 1.0 + self.gust_factor * math.sin(
+            2.0 * math.pi * (t + self.phase_s) / self.gust_period_s
+        )
         return self.mean_speed_kt * gust, direction % 360.0
 
 

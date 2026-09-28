@@ -171,9 +171,20 @@ class Helm:
     _last_sign: int = field(default=0, repr=False)
 
     def target_heading(
-        self, boat: Boat, mark_x: float, mark_y: float, tws_kt: float, wind_from: float
+        self,
+        boat: Boat,
+        mark_x: float,
+        mark_y: float,
+        tws_kt: float,
+        wind_from: float,
+        t: float = 0.0,
+        deficit: float = 0.0,
     ) -> tuple[float, str | None]:
         """(heading to steer, manoeuvre kind if this heading commits one).
+
+        `t` and `deficit` are what a tactical helm needs and this one ignores: the
+        clock, and how much wind the boat is currently being denied. They are on
+        the base signature so the simulator drives every policy the same way.
 
         Manoeuvre detection is CENTRAL here rather than per-branch: any commanded
         heading that flips the sign of the true wind angle is a tack or a gybe, and
