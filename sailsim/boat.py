@@ -157,12 +157,29 @@ class Boat:
     start_speed_kt: float = 0.0
     # Imposed during the pre-start when a boat is holding back. None means "sail".
     speed_cap_kt: float | None = None
+    # Rules. `penalty_remaining_s` is time left spinning a two-turns penalty;
+    # `fouls` counts infringements and `penalties_taken` completed turns. Contact
+    # is counted separately because rule 14 binds both boats, not just the
+    # give-way one.
+    penalty_remaining_s: float = 0.0
+    fouls: int = 0
+    penalties_taken: int = 0
+    contacts: int = 0
+    gave_way_s: float = 0.0
+    # Contact is counted per EPISODE, not per timestep. Two boats touching for six
+    # seconds is one incident; without this it was counted twelve times and an
+    # 18-boat race reported nearly eight thousand collisions.
+    contact_cooldown_s: float = 0.0
     distance_sailed_m: float = 0.0
     track: list[tuple[float, float, float]] = field(default_factory=list)
 
     @property
     def length_m(self) -> float:
         return self.polar.boat_length_m
+
+    @property
+    def beam_m(self) -> float:
+        return self.polar.beam_m
 
     def twa(self, wind_from: float) -> float:
         return geo.true_wind_angle(self.heading, wind_from)

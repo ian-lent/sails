@@ -30,6 +30,7 @@ from . import geometry as geo
 from .boat import Boat
 from .course import Course, Helm
 from .interaction import Disturbance, FleetWind
+from . import rules as rules_mod
 from . import start as start_mod
 import math
 
@@ -40,6 +41,83 @@ from .wind import WindField
 # rather than constructing it inside the loop is what will let a search compare
 # policies — and what lets a test hold the policy fixed while varying boat speed.
 HelmFactory = "Callable[[Boat], Helm]"
+
+
+def _apply_rules(boats, wind, t, dt, radius_lengths):
+    """Resolve encounters, impose avoidance, and penalise fouls.
+
+    Returns {boat_id: (heading override or None, speed cap or None)}.
+
+    Like the interaction model, this reads a FROZEN view of the fleet: every
+    encounter is judged against positions at the top of the timestep, so no boat
+    is judged against another that has already moved this step and the outcome
+    cannot depend on list order.
+    """
+    live = [b for b in boats if b.finished_at is None]
+    commands: dict[int, tuple[float | None, float | None]] = {}
+
+    for i, a in enumerate(live):
+        for b in live[i + 1:]:
+            gap = geo.distance(a.x, a.y, b.x, b.y)
+            if gap > radius_lengths * (a.length_m + b.length_m) / 2.0:
+                continue
+
+            _, wind_from = wind.at((a.x + b.x) / 2.0, (a.y + b.y) / 2.0, t)
+            encounter = rules_mod.right_of_way(a, b, wind_from)
+            if encounter is None:
+                continue
+
+            give_way = a if encounter.give_way == a.boat_id else b
+            row = b if give_way is a else a
+
+            # Contact is a foul by whoever had to keep clear. Rule 14 also binds
+            # the right-of-way boat to avoid contact, and that half is not
+            # modelled: only the give-way boat is penalised here.
+            if rules_mod.hulls_touching(a, b):
+                if a.contact_cooldown_s <= 0.0 and b.contact_cooldown_s <= 0.0:
+                    a.contacts += 1
+                    b.contacts += 1
+                    a.contact_cooldown_s = 6.0
+                    b.contact_cooldown_s = 6.0
+                    if give_way.penalty_remaining_s <= 0.0:
+                        give_way.fouls += 1
+                        give_way.penalty_remaining_s = rules_mod.penalty_seconds(give_way)
+                # Get out, whatever else is going on. Predictive avoidance is no
+                # use once the hulls are already touching.
+                commands[give_way.boat_id] = (
+                    rules_mod.separation_heading(give_way, row),
+                    None,
+                )
+                continue
+
+            if rules_mod.keeping_clear(give_way, row, dt):
+                continue
+
+            # Rule 14, the half that binds the RIGHT-OF-WAY boat: once it is clear
+            # the other boat is not keeping clear, she must avoid contact too. It
+            # costs her nothing in the rules -- she is exonerated -- but it is what
+            # stops two boats sailing into each other while one of them is in the
+            # right. Leaving this out was most of why a race logged dozens of
+            # collisions: give-way boats were avoiding too late, and nobody else
+            # was avoiding at all.
+            if rules_mod.contact_imminent(a, b, dt):
+                existing = commands.get(row.boat_id, (None, None))
+                if existing[0] is None:
+                    commands[row.boat_id] = (
+                        rules_mod.separation_heading(row, give_way),
+                        existing[1],
+                    )
+
+            give_way.gave_way_s += dt
+            heading, cap = rules_mod.avoidance(give_way, row, encounter.rule, wind_from)
+            previous = commands.get(give_way.boat_id, (None, None))
+            # Several boats can oblige the same boat at once; take the most
+            # restrictive of each command rather than letting the last one win.
+            commands[give_way.boat_id] = (
+                heading if previous[0] is None else previous[0],
+                cap if previous[1] is None else min(previous[1], cap) if cap is not None else previous[1],
+            )
+    return commands
 
 
 @dataclass
@@ -55,6 +133,8 @@ class RaceResult:
     bias: "start_mod.LineBias | None" = None
     favoured_end: str | None = None
     ocs_count: int = 0
+    fouls: int = 0
+    contacts: int = 0
 
     def finishers(self) -> int:
         return sum(1 for _, _, t in self.order if t is not None)
@@ -135,6 +215,14 @@ class Simulator:
     # How hard the fleet crowds the favoured end. Zero spreads boats evenly, which
     # is what isolates the line's advantage from the dirty air that crowding causes.
     start_crowding: float = 0.65
+    # None disables the rules entirely. That is the control case and it is the one
+    # a policy search must never be run against: without right of way, barging and
+    # sailing through starboard-tackers are free and an optimiser will find them.
+    rules: bool = True
+    # Only boats within this many lengths of each other are tested. An 18-boat
+    # fleet is 153 pairs per timestep; nearly all of them are hundreds of metres
+    # apart and cannot possibly interact.
+    rules_radius_lengths: float = 8.0
     # None disables boat-on-boat interaction entirely, which is the control case:
     # any claim that dirty air caused something should be checked by running the
     # same race with this off.
@@ -202,9 +290,17 @@ class Simulator:
                 if self.interaction is not None
                 else None
             )
+            commands = (
+                _apply_rules(boats, self.wind, t, self.dt, self.rules_radius_lengths)
+                if self.rules
+                else {}
+            )
+
             for b in boats:
                 if b.finished_at is not None:
                     continue
+                if b.contact_cooldown_s > 0.0:
+                    b.contact_cooldown_s -= self.dt
                 tws, wdir = self.wind.at(b.x, b.y, t)
                 if fleet_wind is not None:
                     tws, wdir, deficit = fleet_wind.at(b, tws, wdir)
@@ -217,8 +313,35 @@ class Simulator:
                     heading, cap = start_mod.approach_command(
                         b, plans[b.boat_id], pin, line_boat, tws, wdir, -t
                     )
+                    override, rule_cap = commands.get(b.boat_id, (None, None))
+                    if override is not None:
+                        heading = override
+                    if rule_cap is not None:
+                        cap = rule_cap if cap is None else min(cap, rule_cap)
                     b.speed_cap_kt = cap
                     b.step(heading, tws, wdir, self.dt)
+                    if recording:
+                        b.record(t)
+                    continue
+
+                # A boat spinning a two-turns penalty is doing nothing else. The
+                # cost is the time it takes at this boat's turn rate, which makes
+                # it more expensive in a breeze, exactly as on the water.
+                if b.penalty_remaining_s > 0.0:
+                    b.penalty_remaining_s -= self.dt
+                    # RRS 44.1: a boat taking a penalty shall keep well clear. It
+                    # spins, but it also sails off to leeward out of the traffic
+                    # rather than turning circles in the middle of the fleet, which
+                    # is what produced cascading fouls.
+                    b.speed_cap_kt = b.target_speed_kt(tws, wdir) * 0.5
+                    spin = geo.wrap360(b.heading + b.max_turn_rate_deg_s * self.dt)
+                    clear_away = geo.wrap360(wdir + 180.0)
+                    b.step(
+                        spin if b.penalty_remaining_s > 6.0 else clear_away,
+                        tws, wdir, self.dt,
+                    )
+                    if b.penalty_remaining_s <= 0.0:
+                        b.penalties_taken += 1
                     if recording:
                         b.record(t)
                     continue
@@ -242,6 +365,14 @@ class Simulator:
                 if mark is None:
                     continue
                 heading, maneuver = helms[b.boat_id].target_heading(b, mark.x, mark.y, tws, wdir)
+                # Keeping clear overrides the helm: the obligation is not optional,
+                # and a policy that ignored it would simply be sailing illegally.
+                override, cap = commands.get(b.boat_id, (None, None))
+                if override is not None:
+                    heading = override
+                    maneuver = None
+                if cap is not None:
+                    b.speed_cap_kt = cap
                 if maneuver is not None:
                     b.begin_maneuver(tws, maneuver)
                 b.step(heading, tws, wdir, self.dt)
@@ -274,6 +405,8 @@ class Simulator:
 
         ordered = sorted(boats, key=key)
         estimates = []
+        if not self.rules:
+            estimates.append("RULES ARE OFF: right of way is not enforced in this run")
         if self.prestart_s > 0.0:
             estimates.append("start timing errors and line bias are drawn, not observed")
         if self.interaction is not None:
@@ -288,6 +421,8 @@ class Simulator:
             bias=start_mod.LineBias(measured, float("nan"), float("nan")),
             favoured_end=start_mod.favoured_end(pin, line_boat, wdir0),
             ocs_count=sum(1 for b in boats if b.ocs),
+            fouls=sum(b.fouls for b in boats),
+            contacts=sum(b.contacts for b in boats) // 2,
             order=[(b.boat_id, b.name, b.finished_at) for b in ordered],
             elapsed_s=t,
             wind_name=self.wind.name,

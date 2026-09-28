@@ -252,12 +252,14 @@ group("emergent: lanes in an 18-boat race")
 course = Course.for_conditions(TWS, C420, upwind_minutes=5.5, laps=2, wind_from=WIND_FROM)
 
 clean_fleet = build_fleet(size=18, course=course, seed=7)
+# Rules off in both arms: this section is about dirty air, and keeping-clear
+# manoeuvres would be a second cause of the same effect.
 clean = Simulator(course, UniformWind(speed_kt=TWS, direction_from=WIND_FROM),
-                  interaction=None).run(clean_fleet)
+                  interaction=None, rules=False).run(clean_fleet)
 
 dirty_fleet = build_fleet(size=18, course=course, seed=7)
 dirty = Simulator(course, UniformWind(speed_kt=TWS, direction_from=WIND_FROM),
-                  interaction=D).run(dirty_fleet)
+                  interaction=D, rules=False).run(dirty_fleet)
 
 check("fleet still completes the course with interaction on", dirty.finishers() == 18,
       f"{dirty.finishers()}/18")

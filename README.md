@@ -7,6 +7,7 @@ venue. **Nothing here is calibrated to real data yet** — see Provenance.
     python3 tests/test_core.py        # spine: geometry, polar, manoeuvres, course
     python3 tests/test_interaction.py # shadow, backwind, lanes
     python3 tests/test_start.py       # line bias, the approach, OCS
+    python3 tests/test_rules.py       # right of way, mark-room, penalties
     python3 plot_shadow.py            # draw the disturbance field
     python3 run_demo.py               # 18 boats, oscillating wind, writes a plot
     python3 run_demo.py uniform 12    # steady 12 kt
@@ -22,6 +23,7 @@ venue. **Nothing here is calibrated to real data yet** — see Provenance.
 | `boat.py` | Agent state, kinematics, and the manoeuvre-cost model. |
 | `interaction.py` | Wind shadow, backwind, and lane quality. Boats disturbing each other. |
 | `start.py` | Line bias, the pre-start approach, and being over early. |
+| `rules.py` | RRS Part 2: right of way, mark-room, contact, penalties. |
 | `course.py` | Marks, legs, splits, and `Helm` — the policy layer that gets replaced. |
 | `sim.py` | The fleet loop. Takes a `helm_factory` so policies can be swapped. |
 
@@ -95,6 +97,29 @@ variance is large relative to it. A good calibration target.
 `Simulator(prestart_s=0)` skips the sequence entirely — the control case for
 measuring what the start is worth.
 
+## The rules
+
+RRS Part 2, the right-of-way core: **rule 10** (port keeps clear of starboard),
+**11** (windward keeps clear of leeward), **12** (clear astern keeps clear),
+**13** (tacking), **14** (avoid contact, binding *both* boats), **18** (mark-room
+on a three-length zone) and **44** (the two-turns penalty), plus the definitions
+they rest on — clear astern, overlap, windward/leeward, the zone.
+
+A penalty is 720° of turning at the boat's own turn rate, so it costs 24 s for a
+quick-turning boat and 48 s for a slow one — more expensive in a breeze, as on the
+water.
+
+**Not implemented, and each changes real outcomes:** rules 15 (acquiring right of
+way), **17 (proper course — the rule that constrains the leebow, and the most
+important omission)**, 16, 19, 20, 21, 22, 30, 31, and 42 (propulsion — without it
+an optimiser may learn to pump). There are also no protests: a foul here is
+detected geometrically and penalised immediately, which is closer to umpired team
+racing than to protest-based fleet racing, so **treat the foul rate as an upper
+bound**.
+
+`Simulator(rules=False)` disables enforcement and the run says so loudly in its
+provenance. A policy search must never be run against it.
+
 ## Calibration encoded as tests
 
 Domain knowledge lives in `tests/test_core.py` as assertions rather than comments:
@@ -109,6 +134,8 @@ Domain knowledge lives in `tests/test_core.py` as assertions rather than comment
   is the upwind one, that the advantage matches `L·sin(θ)`, and that a wind shift
   can reverse which end is favoured.
 * **The favoured end pays**, with a margin rather than a bare inequality.
+* **Right of way** — every determination above, in explicit geometry, plus
+  precedence (rule 10 outranks overlap; rule 13 outranks rule 11).
 * **Shadow geometry** — that it trails aft and to leeward, that the windward lane
   is clear, that backwind heads a boat on the same tack, and that port mirrors
   starboard exactly.
@@ -136,6 +163,17 @@ Domain knowledge lives in `tests/test_core.py` as assertions rather than comment
   `target_speed_kt` before the boat's heading was set, and a fresh boat heads 000 —
   dead head to wind against a northerly — so the polar returned zero. It read as a
   broken controller and was a broken initialisation.
+* **7,911 collisions in one race.** Contact was counted per *timestep*, not per
+  episode, and nothing separated boats once they overlapped — so they fouled, spun
+  a penalty on the spot, finished it still touching, and fouled again. Fixed with
+  contact episodes, a separation heading, penalised boats sailing clear, and the
+  half of rule 14 that binds the right-of-way boat. Chain: 7911 → 80 → 60 → 27.
+* **Four control tests that did not state their world.** "The fastest crew wins"
+  is only true when nothing can intervene; switching rules on by default duly made
+  things intervene and broke assertions that were right about physics and silent
+  about their assumptions. Each now sets its own world explicitly.
+* **A vacuous assertion.** `check(..., R.hulls_touching(a, b) or True)` passes
+  forever. Worse than no test.
 * **The favoured end worth exactly nothing.** `line_side` measured from the line's
   *midpoint* along the wind axis, so on a biased line a boat at the favoured end
   read as already over and the controller held it back, neutralising the advantage

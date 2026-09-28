@@ -75,6 +75,9 @@ class Polar:
 
     name: str
     boat_length_m: float
+    # Beam matters only for contact: rules.hulls_touching treats boats as segments
+    # and asks whether they come within the mean beam.
+    beam_m: float
     table: dict[float, tuple[float, ...]]
     scale: float = 1.0
     is_measured: bool = False
@@ -168,10 +171,11 @@ class Polar:
         return 90.0
 
 
-C420 = Polar(name="C420", boat_length_m=BOAT_LENGTH_M["c420"], table=C420_TABLE)
+C420 = Polar(name="C420", boat_length_m=BOAT_LENGTH_M["c420"], beam_m=1.63, table=C420_TABLE)
 FJ = Polar(
     name="FJ",
     boat_length_m=BOAT_LENGTH_M["fj"],
+    beam_m=1.52,
     table=C420_TABLE,
     scale=FJ_SPEED_SCALE,
     source="estimated: C420 shape scaled by %.2f — see module docstring" % FJ_SPEED_SCALE,

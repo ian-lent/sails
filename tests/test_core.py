@@ -196,7 +196,15 @@ check("fleet is 18 boats", len(fleet) == 18)
 check("crews differ in speed", len({round(b.speed_factor, 4) for b in fleet}) == 18)
 check("boats start spread along the line", max(b.x for b in fleet) - min(b.x for b in fleet) > 100.0)
 
-result = Simulator(fleet_course, UniformWind(speed_kt=8.0, direction_from=0.0)).run(fleet)
+# Rules and dirty air OFF throughout this section. These checks isolate the boat
+# and course models -- "the fastest crew wins" is only true when nothing else can
+# intervene, and when rules were switched on by default they duly intervened and
+# broke four assertions that were right about physics and silent about their world.
+# A test that does not state its world is a test that breaks when the world moves.
+PHYSICS_ONLY = dict(interaction=None, rules=False, prestart_s=0.0)
+result = Simulator(
+    fleet_course, UniformWind(speed_kt=8.0, direction_from=0.0), **PHYSICS_ONLY
+).run(fleet)
 check("every boat finishes in uniform 8kt", result.finishers() == 18, f"{result.finishers()}/18")
 
 winner_time = result.order[0][2]
@@ -245,6 +253,7 @@ check(
 print(f"      ideal {ideal:.0f} m | fleet {min(b.distance_sailed_m for b in fleet):.0f}"
       f"-{max(b.distance_sailed_m for b in fleet):.0f} m")
 check("provenance is reported, not assumed", len(result.estimates_used) >= 2)
+check("a run with rules off says so", any("RULES ARE OFF" in n for n in result.estimates_used))
 
 # The fastest crew does NOT have to win the fleet race above, and believing it did
 # was my error, not the model's: boats there differ in tack bias and handling as
@@ -260,9 +269,9 @@ for i, b in enumerate(control_fleet):
 # Identical helms, supplied through the injection point, so the ONLY difference
 # between these boats is speed.
 same_helm = lambda b: Helm(tack_bias=0.0)  # noqa: E731
-control_result = Simulator(control_course, UniformWind(speed_kt=8.0, direction_from=0.0)).run(
-    control_fleet, helm_factory=same_helm
-)
+control_result = Simulator(
+    control_course, UniformWind(speed_kt=8.0, direction_from=0.0), **PHYSICS_ONLY
+).run(control_fleet, helm_factory=same_helm)
 check(
     "speed-only fleet: the fastest crew wins in uniform wind",
     control_result.order[0][0] == max(control_fleet, key=lambda b: b.speed_factor).boat_id,
@@ -291,9 +300,9 @@ tactical_fleet = build_fleet(size=6, course=tactical_course, seed=11)
 for b in tactical_fleet:
     b.speed_factor = 1.0
     b.handling = 1.0
-tactical = Simulator(tactical_course, OscillatingWind(amplitude_deg=12.0, period_s=200.0)).run(
-    tactical_fleet
-)
+tactical = Simulator(
+    tactical_course, OscillatingWind(amplitude_deg=12.0, period_s=200.0), **PHYSICS_ONLY
+).run(tactical_fleet)
 times = [t for _, _, t in tactical.order if t is not None]
 check(
     "with identical speed, steering choices alone spread the fleet",
@@ -304,7 +313,9 @@ check(
 # Oscillating wind must actually change the racing, or the wind layer is inert.
 osc_course = Course.windward_leeward(beat_length_m=730.0, laps=2, wind_from=0.0)
 osc_fleet = build_fleet(size=18, course=osc_course)
-osc = Simulator(osc_course, OscillatingWind(amplitude_deg=12.0, period_s=200.0)).run(osc_fleet)
+osc = Simulator(
+    osc_course, OscillatingWind(amplitude_deg=12.0, period_s=200.0), **PHYSICS_ONLY
+).run(osc_fleet)
 check("fleet finishes in oscillating wind too", osc.finishers() == 18, f"{osc.finishers()}/18")
 check(
     "oscillating wind changes the finish order versus uniform",
@@ -323,7 +334,7 @@ for tws in (6.0, 9.0, 12.0, 16.0):
     for b in spec_fleet:
         b.speed_factor = 1.0
         b.handling = 1.0
-    Simulator(spec_course, UniformWind(speed_kt=tws, direction_from=0.0)).run(
+    Simulator(spec_course, UniformWind(speed_kt=tws, direction_from=0.0), **PHYSICS_ONLY).run(
         spec_fleet, helm_factory=lambda b: Helm(tack_bias=0.0)
     )
     # Splits: mark 0 ends beat one, mark 1 ends run one, mark 2 ends beat two.
