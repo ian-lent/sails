@@ -116,3 +116,35 @@ def knots(ms: float) -> float:
 
 def ms(knots_value: float) -> float:
     return knots_value * KNOTS_TO_MS
+
+
+def apparent_wind(tws_kt: float, twa_deg: float, boat_speed_kt: float) -> tuple[float, float]:
+    """(apparent wind speed, signed apparent wind angle) from true wind and boat speed.
+
+    THIS IS THE FUNCTION THE WHOLE INTERACTION MODEL TURNS ON, because a boat's
+    wind shadow lies downwind in the APPARENT wind, not the true wind, and the two
+    differ most exactly where racing is densest — upwind.
+
+    Beating in 8 knots at 41 degrees true, a dinghy doing 3 knots sees the wind
+    about 30 degrees off the bow: eleven degrees further forward than the true
+    angle. So the shadow is rotated forward by eleven degrees too. That is not a
+    detail. It is the difference between "the bad air is directly behind the boat
+    ahead" and the truth, which is that the bad air lies behind and to LEEWARD, and
+    is why the escape from it is to sail higher or tack rather than to bear away.
+
+    Sign convention follows true_wind_angle: positive is wind over the starboard
+    side. The apparent angle always has the same sign as the true angle and a
+    smaller magnitude, because the boat's own motion adds a headwind.
+    """
+    rad = math.radians(twa_deg)
+    # Longitudinal component points at the bow; the boat's motion adds to it.
+    along = tws_kt * math.cos(rad) + boat_speed_kt
+    across = tws_kt * math.sin(rad)
+    return math.hypot(along, across), math.degrees(math.atan2(across, along))
+
+
+def apparent_wind_from(heading: float, wind_from: float, boat_speed_kt: float, tws_kt: float) -> float:
+    """Compass bearing the APPARENT wind blows from, for a boat in this state."""
+    twa = true_wind_angle(heading, wind_from)
+    _, awa = apparent_wind(tws_kt, twa, boat_speed_kt)
+    return wrap360(heading + awa)

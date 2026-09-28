@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from . import geometry as geo
 from .boat import Boat
 from .course import Course, Helm
+from .interaction import Disturbance, FleetWind
 from .polar import CLASSES, Polar
 from .wind import WindField
 
@@ -53,13 +54,17 @@ class RaceResult:
         return sum(1 for _, _, t in self.order if t is not None)
 
     def table(self) -> str:
-        lines = [f"{'pos':>3}  {'boat':<12} {'finish':>8}  {'tacks':>5} {'gybes':>5} {'dist m':>7}"]
+        lines = [
+            f"{'pos':>3}  {'boat':<12} {'finish':>8}  {'tacks':>5} {'gybes':>5} "
+            f"{'dist m':>7} {'dirty s':>8} {'def-s':>7}"
+        ]
         by_id = {b.boat_id: b for b in self.boats}
         for i, (boat_id, name, t) in enumerate(self.order, start=1):
             b = by_id[boat_id]
             finish = f"{t:7.1f}s" if t is not None else "     DNF"
             lines.append(
-                f"{i:>3}  {name:<12} {finish:>8}  {b.tacks:>5} {b.gybes:>5} {b.distance_sailed_m:>7.0f}"
+                f"{i:>3}  {name:<12} {finish:>8}  {b.tacks:>5} {b.gybes:>5} "
+                f"{b.distance_sailed_m:>7.0f} {b.dirty_air_s:>8.0f} {b.dirty_air_integral:>7.1f}"
             )
         return "\n".join(lines)
 
@@ -115,6 +120,10 @@ class Simulator:
     dt: float = 0.5
     max_time_s: float = 2400.0
     record_every_s: float = 5.0
+    # None disables boat-on-boat interaction entirely, which is the control case:
+    # any claim that dirty air caused something should be checked by running the
+    # same race with this off.
+    interaction: Disturbance | None = field(default_factory=Disturbance)
 
     def run(self, boats: list[Boat], helm_factory=None) -> RaceResult:
         """Race the fleet. `helm_factory(boat) -> Helm` overrides the default policy.
@@ -144,10 +153,23 @@ class Simulator:
             if all(b.finished_at is not None for b in boats):
                 break
             recording = t >= next_record
+            # Snapshot the fleet BEFORE anyone moves, so every boat is disturbed by
+            # the same frozen world and the result cannot depend on list order.
+            fleet_wind = (
+                FleetWind.snapshot(boats, self.wind, t, self.interaction)
+                if self.interaction is not None
+                else None
+            )
             for b in boats:
                 if b.finished_at is not None:
                     continue
                 tws, wdir = self.wind.at(b.x, b.y, t)
+                if fleet_wind is not None:
+                    tws, wdir, deficit = fleet_wind.at(b, tws, wdir)
+                    if deficit > 0.01:
+                        b.dirty_air_s += self.dt
+                        b.dirty_air_integral += deficit * self.dt
+                        b.worst_deficit = max(b.worst_deficit, deficit)
                 mark = self.course.target_mark(b)
                 if mark is None:
                     continue
@@ -171,6 +193,8 @@ class Simulator:
 
         ordered = sorted(boats, key=key)
         estimates = []
+        if self.interaction is not None:
+            estimates.append("wind shadow and backwind magnitudes are estimated, not measured")
         if not self.wind.is_measured:
             estimates.append(f"wind field '{self.wind.name}' is synthetic, not measured")
         if not boats[0].polar.is_measured:

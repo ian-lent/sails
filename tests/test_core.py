@@ -244,7 +244,7 @@ check(
 )
 print(f"      ideal {ideal:.0f} m | fleet {min(b.distance_sailed_m for b in fleet):.0f}"
       f"-{max(b.distance_sailed_m for b in fleet):.0f} m")
-check("provenance is reported, not assumed", len(result.estimates_used) == 2)
+check("provenance is reported, not assumed", len(result.estimates_used) >= 2)
 
 # The fastest crew does NOT have to win the fleet race above, and believing it did
 # was my error, not the model's: boats there differ in tack bias and handling as

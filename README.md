@@ -4,7 +4,9 @@ Infrastructure for simulating college fleet racing (FJ / C420, no spinnaker) in
 order to search for strategic and tactical policy. Severn River is the target
 venue. **Nothing here is calibrated to real data yet** — see Provenance.
 
-    python3 tests/test_core.py        # 50 offline checks, no deps beyond numpy
+    python3 tests/test_core.py        # spine: geometry, polar, manoeuvres, course
+    python3 tests/test_interaction.py # shadow, backwind, lanes
+    python3 plot_shadow.py            # draw the disturbance field
     python3 run_demo.py               # 18 boats, oscillating wind, writes a plot
     python3 run_demo.py uniform 12    # steady 12 kt
     python3 run_demo.py persistent 8  # a righty through the race
@@ -17,6 +19,7 @@ venue. **Nothing here is calibrated to real data yet** — see Provenance.
 | `polar.py` | Boat speed from (TWS, TWA). **Estimated shapes**, with VMG optima cached. |
 | `wind.py` | Wind field interface: uniform, oscillating, persistent. Swappable by design. |
 | `boat.py` | Agent state, kinematics, and the manoeuvre-cost model. |
+| `interaction.py` | Wind shadow, backwind, and lane quality. Boats disturbing each other. |
 | `course.py` | Marks, legs, splits, and `Helm` — the policy layer that gets replaced. |
 | `sim.py` | The fleet loop. Takes a `helm_factory` so policies can be swapped. |
 
@@ -29,10 +32,7 @@ course sizing for conditions.
 
 Absent, in rough order of how much they matter:
 
-1. **Boat-on-boat interaction.** No wind shadow, no backwind, no safe leeward.
-   Boats sail through each other. Without this there are no lanes, and without
-   lanes there is no reason to care where you start or whom you tack on.
-2. **The rules.** No right of way, no mark-room, no penalties. A policy search run
+1. **The rules.** No right of way, no mark-room, no penalties. A policy search run
    against this simulator would learn illegal moves, so rules must land before
    optimisation does.
 3. **The start.** Boats begin on the line at speed. College racing is decided
@@ -67,6 +67,9 @@ Domain knowledge lives in `tests/test_core.py` as assertions rather than comment
 * **Sailing efficiency** — the fleet must not beat the tacking geometry, nor sail
   more than 12% over it.
 * **Manoeuvre count** — a regression guard against the bug below.
+* **Shadow geometry** — that it trails aft and to leeward, that the windward lane
+  is clear, that backwind heads a boat on the same tack, and that port mirrors
+  starboard exactly.
 
 ## Bugs worth remembering
 

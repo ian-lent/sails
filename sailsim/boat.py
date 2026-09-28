@@ -139,6 +139,13 @@ class Boat:
     # diagnosed — a policy that gains on the beat and gives it back on the run is
     # invisible in the finish time and obvious here.
     leg_times: list[float] = field(default_factory=list)
+    # Lane quality. `dirty_air_s` is seconds spent with any measurable deficit and
+    # `dirty_air_integral` is deficit-seconds, which is the honest one: five seconds
+    # squarely behind a boat costs far more than thirty seconds clipping an edge.
+    # Finishing position says a boat lost; these say whether bad air is why.
+    dirty_air_s: float = 0.0
+    dirty_air_integral: float = 0.0
+    worst_deficit: float = 0.0
     distance_sailed_m: float = 0.0
     track: list[tuple[float, float, float]] = field(default_factory=list)
 
