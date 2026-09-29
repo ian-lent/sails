@@ -374,8 +374,14 @@ class Simulator:
                 mark = self.course.target_mark(b)
                 if mark is None:
                     continue
+                # Steer at the GATE, a length and a half to the side the mark is
+                # rounded on, rather than at the buoy itself. Aiming at the buoy
+                # funnels the whole fleet onto one point from every direction; the
+                # gate turns the rounding into a queue.
+                aim = mark.gate_point(1.5 * b.length_m) if mark.is_rounded else (mark.x, mark.y)
                 heading, maneuver = helms[b.boat_id].target_heading(
-                    b, mark.x, mark.y, tws, wdir, t, deficit
+                    b, aim[0], aim[1], tws, wdir, t, deficit,
+                    traffic=[o for o in boats if o is not b and o.finished_at is None],
                 )
                 # Keeping clear overrides the helm: the obligation is not optional,
                 # and a policy that ignored it would simply be sailing illegally.

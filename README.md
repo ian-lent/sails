@@ -216,6 +216,47 @@ every test and plot up to that point:
 * Mark labels stacked illegibly, because a two-lap course rounds the same buoy
   twice and the marks share coordinates.
 
+## Mark roundings
+
+Every mark carries a **rounding side** (`port` by default, the standard W/L
+rounding) and the bearing of the leg that arrives at it — the approach direction
+is what decides which side a port rounding puts a boat on, so it cannot be derived
+from the mark alone. Boats steer at a **gate point** a length and a half to the
+correct side, not at the buoy, which turns the rounding into a queue instead of
+funnelling the fleet onto one point from every direction. A boat that cuts the
+wrong side has not rounded, and its gate pulls it back around.
+
+The steering target and the did-it-round-it test are derived from **one** vector,
+because the first version derived them separately and they came out opposite: the
+gate pulled boats east of the mark while the test demanded west. Neither looked
+wrong alone.
+
+### The duck
+
+A port-tack boat approaching the windward mark inside 14 lengths, with a
+starboard-tacker crossing ahead, **bears away and passes astern** — provided there
+is space behind the starboard layline. If it can already lay the mark on starboard
+it is *at* the layline, and ducking from there would sail past it, so the
+manoeuvre declines and the ordinary layline logic tacks instead. That single
+condition is what stops the duck becoming an automatic overstand.
+
+This lives in the policy, not the rules, and the distinction matters: rule 10
+already forces a port boat to keep clear, and `rules.avoidance` already ducks — but
+only once the boats are nearly converging, as a last-second obligation. This is
+the deliberate version: bear away early, take the transom cleanly, arrive at the
+layline with speed. On the water that is worth several boat lengths.
+
+### What it was worth
+
+| | before | after |
+|---|---|---|
+| Boats rounding the **correct** side | **9 of 18** | **18 of 18** |
+| Fouls within 45 m of a windward mark | 7 | **3** |
+| Total fouls per race | 23 | 19 |
+
+Peak crowding is 5 boats within 4 lengths of the mark — less congested than a real
+windward mark, so the remaining fouls are not a density artefact.
+
 ## Calibration encoded as tests
 
 Domain knowledge lives in `tests/test_core.py` as assertions rather than comments:
@@ -237,6 +278,9 @@ Domain knowledge lives in `tests/test_core.py` as assertions rather than comment
   having the fleet roll over you. An earlier version asserted it on one race.
 * **Right of way** — every determination above, in explicit geometry, plus
   precedence (rule 10 outranks overlap; rule 13 outranks rule 11).
+* **Rounding** — that the gate and the side test agree for every mark on the
+  course, that cutting the wrong side does not count as rounding, and that the
+  duck fires below the layline, declines at it, and is always a bear-away.
 * **The shift-threshold curve** — that ignoring shifts is expensive and that a
   threshold high enough to miss real shifts also loses. The flat middle of the
   curve is deliberately *not* asserted.
@@ -276,6 +320,12 @@ Domain knowledge lives in `tests/test_core.py` as assertions rather than comment
   is only true when nothing can intervene; switching rules on by default duly made
   things intervene and broke assertions that were right about physics and silent
   about their assumptions. Each now sets its own world explicitly.
+* **Half the fleet rounding marks backwards.** Rounding was a bare distance test,
+  so boats passed whichever side they arrived on — exactly 9 of 18 each way, which
+  means boats meeting head on at the buoy. It survived five test suites and was
+  found by scrubbing the replay to a rounding and measuring what it showed. It
+  also left rule 18 resting on nothing, since "the inside boat" is undefined until
+  there is a side to be inside of.
 * **A policy that tacked away its own gains.** "Sail the tack pointing closer to
   the mark" is correct, and near the rhumb line the answer flips every few seconds.
   With a default threshold of 8° it made 40 manoeuvres in steady wind, and its

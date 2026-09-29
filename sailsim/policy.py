@@ -111,6 +111,10 @@ class TacticalHelm(Helm):
     # layline a tack is a commitment, not a tactic, and tacking there either
     # overstands or forces an immediate tack back.
     layline_guard_deg: float = 8.0
+    # How far from the mark the deliberate duck applies, in boat lengths, and how
+    # far astern of the starboard boat to aim when ducking.
+    duck_range_lengths: float = 14.0
+    duck_clearance_lengths: float = 2.0
     # Require a tactical tack to be justified by an actual HEADER against the
     # running mean, not by geometry alone.
     #
@@ -152,6 +156,7 @@ class TacticalHelm(Helm):
         wind_from: float,
         t: float = 0.0,
         deficit: float = 0.0,
+        traffic=(),
     ) -> tuple[float, str | None]:
         self.observe(wind_from, deficit, t)
 
@@ -167,7 +172,12 @@ class TacticalHelm(Helm):
         broad, _ = boat.polar.best_downwind(tws_kt)
 
         if abs(mark_twa) < close_hauled:
-            desired = self._work(boat, to_mark, mark_twa, wind_from, close_hauled, t, upwind=True)
+            duck = self._duck_at_mark(
+                boat, mark_x, mark_y, mark_twa, wind_from, close_hauled, traffic
+            )
+            desired = duck if duck is not None else self._work(
+                boat, to_mark, mark_twa, wind_from, close_hauled, t, upwind=True
+            )
         elif abs(mark_twa) > broad:
             desired = self._work(boat, to_mark, mark_twa, wind_from, broad, t, upwind=False)
         else:
@@ -214,6 +224,77 @@ class TacticalHelm(Helm):
             self._dirty_for_s = 0.0
 
         return geo.heading_for_twa(self._committed * angle, wind_from)
+
+    def _duck_at_mark(
+        self,
+        boat: Boat,
+        mark_x: float,
+        mark_y: float,
+        mark_twa: float,
+        wind_from: float,
+        close_hauled: float,
+        traffic,
+    ) -> float | None:
+        """Bear away and pass astern of the starboard-tack queue at the windward mark.
+
+        THE SITUATION. Approaching a windward mark, boats converge on the starboard
+        layline. A boat still on port has three legal answers: cross ahead if it
+        genuinely can, tack onto the layline (and risk tacking into a wall of
+        boats), or DUCK — bear away, pass astern of the starboard boats, carry on to
+        the layline and tack there. Ducking loses a couple of lengths and almost
+        nothing else; the other two lose the race when they go wrong.
+
+        WHEN IT APPLIES. Only when there is space behind the starboard layline. If
+        the boat can already lay the mark on starboard, it has reached the layline
+        and ducking would take it past — it should tack, not duck, and this returns
+        None so the normal layline logic runs. That single condition is what stops
+        the manoeuvre becoming an automatic overstand.
+
+        WHY IT IS IN THE POLICY AND NOT THE RULES. Rule 10 already makes a port
+        boat keep clear, and the avoidance in rules.py ducks — but only once the
+        boats are nearly converging, as a last-second obligation. This is the
+        deliberate version: bear away early, take the transom cleanly, and arrive
+        at the layline with speed. The difference between the two on the water is
+        several boat lengths, which is why a policy layer exists at all.
+        """
+        if boat.twa(wind_from) >= 0:
+            return None  # already on starboard; nothing to duck
+        if geo.distance(boat.x, boat.y, mark_x, mark_y) > self.duck_range_lengths * boat.length_m:
+            return None
+        # Space behind the starboard layline? If starboard would already lay the
+        # mark we are AT the layline, and ducking from here overstands.
+        if self._lays(mark_twa, close_hauled, 1, upwind=True):
+            return None
+
+        # The starboard boats worth ducking: ahead of us and close enough to matter.
+        best = None
+        for other in traffic:
+            if other.twa(wind_from) < 0:
+                continue  # also on port; not a crossing situation
+            gap = geo.distance(boat.x, boat.y, other.x, other.y)
+            if gap > self.duck_range_lengths * boat.length_m:
+                continue
+            # Only boats we would actually have to cross: roughly ahead of us.
+            if abs(geo.angle_diff(geo.bearing(boat.x, boat.y, other.x, other.y), boat.heading)) > 80.0:
+                continue
+            if best is None or gap < best[0]:
+                best = (gap, other)
+        if best is None:
+            return None
+
+        # Aim astern of the boat we are ducking, far enough back to be clear.
+        _, target = best
+        astern = geo.step_position(
+            target.x, target.y, geo.wrap360(target.heading + 180.0),
+            self.duck_clearance_lengths * target.length_m, 1.0,
+        )
+        heading = geo.bearing(boat.x, boat.y, astern[0], astern[1])
+        # A duck is a bear-away. If the geometry asks us to point HIGHER than
+        # close-hauled we are not ducking, we are pinching into them, so decline
+        # and let the ordinary logic (and rule 10) handle it.
+        if abs(geo.wrap180(wind_from - heading)) < close_hauled:
+            return None
+        return heading
 
     def _better_tack(self, to_mark: float, wind_from: float, angle: float) -> int:
         """Which tack points closer to the mark. The whole policy in one function."""

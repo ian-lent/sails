@@ -17,6 +17,7 @@ Run: python3 tests/test_policy.py
 
 from __future__ import annotations
 
+import math
 import statistics
 import sys
 from pathlib import Path
@@ -208,6 +209,72 @@ clean._committed, clean._committed_leg = 1, 0
 for step in range(30):
     clean.target_heading(b3, 0.0, 600.0, TWS, 0.0, t=step * 0.5, deficit=0.0)
 check("a boat in clear air does not tack out of it", clean._committed == 1)
+
+# --- the deliberate duck at the windward mark --------------------------------
+group("ducking the starboard queue at the mark")
+
+MARK = (0.0, 500.0)
+
+
+# Positions matter here and the first draft got them wrong: a boat 144 m from the
+# mark is outside the duck's 14-length range, so the manoeuvre correctly declined
+# and the test read as a failure of the code. These are set inside the range and
+# below the starboard layline, which is the situation the duck is for.
+def duck_setup(port_pos, stbd_offset=(20.0, 20.0), helm=None):
+    """A port-tack boat near the mark with a starboard-tacker crossing ahead."""
+    h = helm or TacticalHelm()
+    port_boat = beating(-1, x=port_pos[0], y=port_pos[1])
+    port_boat.boat_id = 0
+    stbd = beating(+1, x=port_pos[0] + stbd_offset[0], y=port_pos[1] + stbd_offset[1])
+    stbd.boat_id = 1
+    to_mark = geo.bearing(port_boat.x, port_boat.y, MARK[0], MARK[1])
+    mark_twa = geo.wrap180(0.0 - to_mark)
+    return h, port_boat, stbd, mark_twa
+
+
+# Well below the layline, a starboard boat crossing ahead: duck.
+h, port_boat, stbd, mark_twa = duck_setup((-30.0, 460.0))
+heading = h._duck_at_mark(port_boat, MARK[0], MARK[1], mark_twa, 0.0, CLOSE_HAULED, [stbd])
+check("a port boat below the layline ducks the starboard boat", heading is not None,
+      f"mark_twa {mark_twa:.1f}, close-hauled {CLOSE_HAULED:.1f}")
+if heading is not None:
+    before = abs(port_boat.twa(0.0))
+    after = abs(geo.wrap180(0.0 - heading))
+    print(f"      duck bears away from TWA {before:.0f}° to {after:.0f}°")
+    check("ducking is a bear-away, never a pinch", after > before, f"{before:.0f} -> {after:.0f}")
+    check("and it aims astern, not at, the starboard boat",
+          geo.distance(*geo.step_position(port_boat.x, port_boat.y, heading, 30.0, 1.0),
+                       stbd.x, stbd.y) > 5.0)
+
+# THE SPACE CONDITION, which is the whole point. A boat that can already lay the
+# mark on starboard is AT the layline; ducking from there sails past it. It should
+# tack instead, so the duck must decline and let the layline logic run.
+at_layline = geo.heading_for_twa(CLOSE_HAULED, 0.0)
+lay_x = MARK[0] - math.sin(math.radians(at_layline)) * 90.0
+lay_y = MARK[1] - math.cos(math.radians(at_layline)) * 90.0
+h2, port2, stbd2, twa2 = duck_setup((lay_x, lay_y))
+check(
+    "no duck once the boat can already lay the mark on starboard (no space behind)",
+    h2._duck_at_mark(port2, MARK[0], MARK[1], twa2, 0.0, CLOSE_HAULED, [stbd2]) is None,
+    f"mark_twa {twa2:.1f} vs close-hauled {CLOSE_HAULED:.1f}",
+)
+
+h3, port3, stbd3, twa3 = duck_setup((-30.0, 460.0))
+check("no duck with no starboard boat to duck",
+      h3._duck_at_mark(port3, MARK[0], MARK[1], twa3, 0.0, CLOSE_HAULED, []) is None)
+check("no duck against another port-tacker",
+      h3._duck_at_mark(port3, MARK[0], MARK[1], twa3, 0.0, CLOSE_HAULED,
+                       [beating(-1, x=port3.x + 20.0, y=port3.y + 20.0)]) is None)
+
+on_stbd = beating(+1, x=-30.0, y=460.0)
+check("a boat already on starboard has nothing to duck",
+      h3._duck_at_mark(on_stbd, MARK[0], MARK[1], twa3, 0.0, CLOSE_HAULED, [stbd3]) is None)
+
+far = beating(-1, x=-30.0, y=150.0)
+far_twa = geo.wrap180(0.0 - geo.bearing(far.x, far.y, MARK[0], MARK[1]))
+check("no duck far from the mark — this is a mark manoeuvre, not a rule",
+      h3._duck_at_mark(far, MARK[0], MARK[1], far_twa, 0.0, CLOSE_HAULED,
+                       [beating(+1, x=far.x + 20.0, y=far.y + 20.0)]) is None)
 
 # --- it still sails the course ----------------------------------------------
 group("it still gets round")

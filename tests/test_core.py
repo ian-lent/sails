@@ -181,11 +181,58 @@ check(
     course.start_boat[0] > 0 > course.start_pin[0],
 )
 
+# --- rounding direction ------------------------------------------------------
+# The largest correctness bug this model has had. Rounding used to be a bare
+# distance test, so boats passed whichever side they arrived on: measured over one
+# race, exactly 9 of 18 went each way. Half a fleet rounding backwards means boats
+# meeting HEAD ON at the mark, which is impossible on the water and was generating
+# most of the fouls near marks.
+windward, leeward = course.marks[0], course.marks[1]
+check("marks carry a rounding side", windward.rounding == "port")
+check("and the bearing of the leg that arrives at them",
+      abs(windward.approach_bearing) < 1e-6 and abs(leeward.approach_bearing - 180.0) < 1e-6)
+check("the finish is crossed, not rounded",
+      course.marks[-1].rounding == "none" and not course.marks[-1].is_rounded)
+
+# Port rounding with a northbound approach: the mark passes down the boat's port
+# side, so the boat is EAST of it.
+check("a port rounding puts boats to starboard of the approach",
+      windward.passed_correct_side(20.0, windward.y)
+      and not windward.passed_correct_side(-20.0, windward.y))
+check("the leeward mark reverses, because the approach reverses",
+      leeward.passed_correct_side(-20.0, leeward.y)
+      and not leeward.passed_correct_side(20.0, leeward.y))
+
+# The regression that matters most here: the steering target and the did-it-round
+# test were derived separately and came out OPPOSITE, so the gate pulled boats east
+# while the test demanded west. Neither was wrong-looking alone. They now share one
+# definition, and this asserts they agree for every mark on the course.
+for mark in course.marks:
+    if not mark.is_rounded:
+        continue
+    gate = mark.gate_point(2.0 * C420.boat_length_m)
+    check(f"{mark.name}: the gate is on the side the test accepts",
+          mark.passed_correct_side(*gate),
+          f"gate {gate} rejected by its own mark")
+
 rotated = Course.windward_leeward(beat_length_m=500.0, wind_from=90.0)
 check(
     "course rotates with the wind (wind from 090 puts the mark to the east)",
     rotated.marks[0].x > 490.0 and abs(rotated.marks[0].y) < 1e-6,
 )
+check("the rounding side rotates with the course too",
+      rotated.marks[0].passed_correct_side(rotated.marks[0].x, rotated.marks[0].y - 20.0))
+
+# A boat that cuts the wrong side has not rounded, however close it came.
+wrong_way = Boat(99, "cheat", C420, x=-1.0, y=course.marks[0].y)
+wrong_way.leg = 0
+course.update_progress(wrong_way, 10.0)
+check("passing the wrong side of a mark does not count as rounding it",
+      wrong_way.leg == 0, f"leg advanced to {wrong_way.leg}")
+right_way = Boat(98, "fair", C420, x=+1.0, y=course.marks[0].y)
+right_way.leg = 0
+course.update_progress(right_way, 10.0)
+check("passing the correct side does", right_way.leg == 1)
 
 # --- the fleet actually races ------------------------------------------------
 group("18-boat fleet")

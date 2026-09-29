@@ -16,6 +16,7 @@ it good — a strong baseline hides how much a policy actually adds.
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from . import geometry as geo
@@ -27,10 +28,63 @@ class Mark:
     name: str
     x: float
     y: float
-    # Rounded when the boat comes within this radius. A stand-in for the real
-    # thing: rule 18 mark-room turns on a three-length zone and on overlap at the
-    # moment of entry, none of which exists yet. This is the hook where that goes.
+    # Rounded when the boat comes within this radius AND on the correct side.
     radius_m: float = 8.0
+    # Which side the mark is left on: "port" means keep it to port, which is the
+    # standard windward-leeward rounding.
+    #
+    # THIS WAS MISSING ENTIRELY and it was the largest correctness bug in the
+    # model. Rounding used to be a bare distance test, so boats passed whichever
+    # side they happened to arrive on -- measured over one race, exactly 9 of 18
+    # went each way. Half the fleet rounding backwards means boats meet HEAD ON at
+    # the mark, which cannot happen in a real race and was generating most of the
+    # fouls near marks. It also left rule 18 resting on nothing: "the inside boat"
+    # is undefined until there is a side to be inside of.
+    rounding: str = "port"
+    # Bearing of the leg approaching this mark, filled in by the course builder.
+    # The approach direction is what decides which side "port rounding" puts a
+    # boat on, so it cannot be derived from the mark alone.
+    approach_bearing: float = 0.0
+
+    def side_sign(self) -> int:
+        """+1 if the mark should pass down the boat's port side, -1 for starboard."""
+        return 1 if self.rounding == "port" else -1
+
+    @property
+    def is_rounded(self) -> bool:
+        """False for the finish, which is crossed rather than rounded."""
+        return self.rounding in ("port", "starboard")
+
+    def _offset_unit(self) -> tuple[float, float]:
+        """Unit vector from the mark toward the side boats should pass on.
+
+        ONE definition, used by both the steering target and the did-it-round-it
+        test. The first version derived them separately -- a bearing offset for the
+        gate and a cross product for the test -- and they came out opposite, so the
+        gate pulled boats east of the mark while the test demanded they be west.
+        Neither was obviously wrong on its own. Deriving one from the other removes
+        the chance of that sign drifting again.
+
+        For a port rounding the mark passes down the boat's port side, so the boat
+        is to the RIGHT of the approach direction: +90 degrees from it.
+        """
+        rad = math.radians(self.approach_bearing + 90.0 * self.side_sign())
+        return math.sin(rad), math.cos(rad)
+
+    def gate_point(self, offset_m: float) -> tuple[float, float]:
+        """The point boats should steer at, offset to the correct side of the mark.
+
+        Steering at the mark itself funnels the fleet onto a single point from
+        every direction. Steering at a point a length or two to the correct side
+        turns the rounding into a queue, which is what it is on the water.
+        """
+        ux, uy = self._offset_unit()
+        return self.x + ux * offset_m, self.y + uy * offset_m
+
+    def passed_correct_side(self, x: float, y: float) -> bool:
+        """Is this point on the side of the mark a boat should be rounding from?"""
+        ux, uy = self._offset_unit()
+        return (x - self.x) * ux + (y - self.y) * uy > 0.0
 
 
 @dataclass
@@ -61,7 +115,13 @@ class Course:
         mark = self.target_mark(boat)
         if mark is None:
             return
-        if geo.distance(boat.x, boat.y, mark.x, mark.y) <= mark.radius_m:
+        # Both conditions: close enough AND on the correct side. A boat that cuts
+        # the wrong side of the mark has not rounded it, and its gate point pulls
+        # it back around rather than letting it carry on up the course.
+        if (
+            geo.distance(boat.x, boat.y, mark.x, mark.y) <= mark.radius_m
+            and (not mark.is_rounded or mark.passed_correct_side(boat.x, boat.y))
+        ):
             boat.leg_times.append(t)
             boat.leg += 1
             if boat.leg >= len(self.marks) and boat.finished_at is None:
@@ -112,13 +172,24 @@ class Course:
         ux, uy = math.sin(rad), math.cos(rad)  # unit vector toward the wind
         px, py = uy, -ux                        # perpendicular, to the right
 
-        marks: list[Mark] = []
+        placed: list[tuple[str, float, float, float]] = []
         for lap in range(laps):
-            marks.append(Mark(f"windward-{lap + 1}", ux * beat_length_m, uy * beat_length_m))
+            placed.append((f"windward-{lap + 1}", ux * beat_length_m, uy * beat_length_m, 8.0))
             # Final lap finishes at the line rather than rounding the leeward mark.
             if lap < laps - 1:
-                marks.append(Mark(f"leeward-{lap + 1}", 0.0, 0.0))
-        marks.append(Mark("finish", 0.0, 0.0, radius_m=12.0))
+                placed.append((f"leeward-{lap + 1}", 0.0, 0.0, 8.0))
+        placed.append(("finish", 0.0, 0.0, 12.0))
+
+        # Stamp each mark with the bearing of the leg that arrives at it, which is
+        # what decides which side a port rounding puts a boat on.
+        marks: list[Mark] = []
+        prev = (0.0, 0.0)
+        for name, mx, my, radius in placed:
+            bearing = geo.bearing(prev[0], prev[1], mx, my) if (mx, my) != prev else wind_from
+            # The finish is crossed, not rounded, so it takes no side.
+            rounding = "none" if name == "finish" else "port"
+            marks.append(Mark(name, mx, my, radius, rounding, bearing))
+            prev = (mx, my)
 
         # The line is rotated about its midpoint by the bias. Positive bias puts the
         # PIN upwind, matching start.line_bias's sign convention.
@@ -179,12 +250,15 @@ class Helm:
         wind_from: float,
         t: float = 0.0,
         deficit: float = 0.0,
+        traffic: "Sequence[Boat]" = (),
     ) -> tuple[float, str | None]:
         """(heading to steer, manoeuvre kind if this heading commits one).
 
-        `t` and `deficit` are what a tactical helm needs and this one ignores: the
-        clock, and how much wind the boat is currently being denied. They are on
-        the base signature so the simulator drives every policy the same way.
+        `t`, `deficit` and `traffic` are what a tactical helm needs and this one
+        ignores: the clock, how much wind the boat is being denied, and the other
+        boats. They are on the base signature so the simulator drives every policy
+        the same way — and so this helm stays a genuine control, blind by choice
+        rather than by lacking the inputs.
 
         Manoeuvre detection is CENTRAL here rather than per-branch: any commanded
         heading that flips the sign of the true wind angle is a tack or a gybe, and
