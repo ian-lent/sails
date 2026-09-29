@@ -162,6 +162,10 @@ class Boat:
     # is counted separately because rule 14 binds both boats, not just the
     # give-way one.
     penalty_remaining_s: float = 0.0
+    # Degrees turned so far in the current penalty. The spin ends when the circle
+    # is COMPLETE, not when a clock says so — inferring it from elapsed time lost a
+    # timestep to rounding and left the boat 8-15 degrees short of its turn.
+    penalty_turned_deg: float = 0.0
     fouls: int = 0
     penalties_taken: int = 0
     contacts: int = 0

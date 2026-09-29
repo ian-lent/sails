@@ -198,13 +198,49 @@ slow_turner = boat_on(+1, 0.0, 0.0, 0)
 slow_turner.max_turn_rate_deg_s = 15.0
 fast_turner = boat_on(+1, 0.0, 0.0, 1)
 fast_turner.max_turn_rate_deg_s = 30.0
+check("a One-Turn Penalty is 360 degrees: one tack and one gybe",
+      abs(R.PENALTY_DEGREES - 360.0) < 1e-9)
 check(
-    "a two-turns penalty is 720 degrees, so it costs more when turning is slower",
+    "it costs more when the boat turns more slowly, so more in a breeze",
     R.penalty_seconds(slow_turner) > R.penalty_seconds(fast_turner),
     f"{R.penalty_seconds(slow_turner):.0f}s vs {R.penalty_seconds(fast_turner):.0f}s",
 )
-print(f"      720 deg at 15 deg/s = {R.penalty_seconds(slow_turner):.0f}s, "
-      f"at 30 deg/s = {R.penalty_seconds(fast_turner):.0f}s")
+# Turning through a full circle necessarily crosses head to wind once and dead
+# downwind once, so the spin IS a tack and a gybe with nothing extra to model.
+check("a full circle crosses the wind axis exactly twice",
+      int(R.PENALTY_DEGREES // 180) == 2)
+check(
+    "the penalty is a handful of seconds, not a fifth of a beat",
+    10.0 < R.penalty_seconds(fast_turner) < 35.0,
+    f"{R.penalty_seconds(fast_turner):.0f}s",
+)
+# The clearing tail (rule 44.1: get well clear) is ADDITIONAL to the turn. When it
+# was carved out of the penalty's own duration the boat peeled away partway round
+# and only ever turned 240 of the required 360 degrees -- a penalty that looked
+# right in the results and was never actually sailed.
+check(
+    "getting clear is extra time, not time taken out of the turn",
+    R.penalty_seconds(fast_turner) > R.penalty_turn_seconds(fast_turner),
+    f"total {R.penalty_seconds(fast_turner):.0f}s vs turn {R.penalty_turn_seconds(fast_turner):.0f}s",
+)
+for rate in (15.0, 24.0, 30.0):
+    spinner = boat_on(+1, 0.0, 0.0, 0)
+    spinner.max_turn_rate_deg_s = rate
+    spinner.penalty_remaining_s = R.penalty_seconds(spinner)
+    dt = 0.5
+    while spinner.penalty_remaining_s > 0.0:
+        spinner.penalty_remaining_s -= dt
+        if spinner.penalty_turned_deg < R.PENALTY_DEGREES:
+            spinner.penalty_turned_deg += rate * dt
+    check(
+        f"at {rate:.0f} deg/s the boat turns the full circle, not a timestep short",
+        spinner.penalty_turned_deg >= R.PENALTY_DEGREES,
+        f"turned {spinner.penalty_turned_deg:.0f} deg",
+    )
+print(f"      360 deg at 15 deg/s = {R.penalty_seconds(slow_turner):.0f}s, "
+      f"at 30 deg/s = {R.penalty_seconds(fast_turner):.0f}s "
+      f"(two turns would have been {2 * R.penalty_seconds(slow_turner):.0f}s / "
+      f"{2 * R.penalty_seconds(fast_turner):.0f}s)")
 
 # --- avoidance ---------------------------------------------------------------
 group("avoiding action")

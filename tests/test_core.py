@@ -26,7 +26,7 @@ from sailsim.boat import Boat, _interp_profile  # noqa: E402
 from sailsim.course import Course, Helm  # noqa: E402
 from sailsim.polar import C420, FJ  # noqa: E402
 from sailsim.sim import Simulator, build_fleet  # noqa: E402
-from sailsim.wind import OscillatingWind, UniformWind  # noqa: E402
+from sailsim.wind import OscillatingWind, PersistentShift, UniformWind  # noqa: E402
 
 FAILURES: list[str] = []
 
@@ -114,6 +114,76 @@ check(
     f"best {dn_vmg:.2f} at {dn_twa:.0f} vs DDW {C420.speed(6.0, 180.0):.2f}",
 )
 check("downwind optimum is a broad reach, not a beam reach", 130.0 < dn_twa < 180.0, f"{dn_twa:.1f}")
+
+# --- the wind actually oscillates -------------------------------------------
+group("wind (measured as a boat experiences it, not as configured)")
+
+# Configuring an oscillation is not the same as a boat being in one. Spatial phase,
+# the boat's own motion through the field, and the sampling interval can all damp or
+# alias it away, and a race in a breeze that turns out to be flat would invalidate
+# every strategic conclusion drawn from it while looking completely normal. So
+# these sample along a real track rather than trusting the constructor.
+import math as _m  # noqa: E402
+
+
+def sampled(field, seconds=1400, dt=1.0, track=None):
+    """(directions, speeds) a boat would see, following an optional path."""
+    dirs, speeds = [], []
+    for i in range(int(seconds / dt)):
+        t = i * dt
+        x, y = track(t) if track else (0.0, 0.0)
+        spd, direction = field.at(x, y, t)
+        dirs.append(geo.wrap180(direction))
+        speeds.append(spd)
+    return dirs, speeds
+
+
+steady_dirs, steady_speeds = sampled(UniformWind(speed_kt=8.0, direction_from=30.0))
+check("uniform wind really is constant",
+      max(steady_dirs) - min(steady_dirs) < 1e-9 and max(steady_speeds) - min(steady_speeds) < 1e-9)
+
+osc = OscillatingWind(mean_direction=0.0, amplitude_deg=12.0, period_s=200.0,
+                      mean_speed_kt=8.0, spatial_wavelength_m=1600.0)
+# A boat beating up the course and back, so the spatial term is exercised.
+beat = lambda t: (120.0 * _m.sin(t / 90.0), 250.0 + 250.0 * _m.sin(t / 300.0))  # noqa: E731
+dirs, speeds = sampled(osc, track=beat)
+span = max(dirs) - min(dirs)
+spread = (sum((d - sum(dirs) / len(dirs)) ** 2 for d in dirs) / len(dirs)) ** 0.5
+crossings = sum(1 for i in range(1, len(dirs)) if (dirs[i - 1] < 0) != (dirs[i] < 0))
+observed_period = 2 * len(dirs) / max(crossings, 1)
+shifted = sum(1 for d in dirs if abs(d) > 6.0) / len(dirs)
+print(f"      span {span:.1f}° (configured ±12) · stdev {spread:.1f}° (a pure sine gives 8.5) · "
+      f"period {observed_period:.0f}s (configured 200) · {100 * shifted:.0f}% of the time beyond 6°")
+
+check("the oscillation reaches its full configured amplitude",
+      span > 20.0, f"span {span:.1f}°, expected about 24°")
+check("it is not damped to a wobble",
+      spread > 5.0, f"stdev {spread:.1f}°")
+check("the period is roughly what was asked for",
+      140.0 < observed_period < 280.0, f"{observed_period:.0f}s")
+check("a boat spends a serious fraction of the race shifted",
+      shifted > 0.35, f"{100 * shifted:.0f}%")
+
+# Speed must move too, and on a DIFFERENT period from direction: velocity shifts
+# and direction shifts are different tactical animals, and a field where they move
+# in lockstep would make them impossible to tell apart.
+check("wind speed oscillates as well as direction",
+      max(speeds) - min(speeds) > 1.0, f"{min(speeds):.2f}-{max(speeds):.2f} kt")
+check("speed and direction are not in lockstep",
+      abs(osc.period_s - osc.gust_period_s) > 30.0,
+      f"direction {osc.period_s}s vs gust {osc.gust_period_s}s")
+
+# Phase must actually produce a different race, or a sweep over phases is sampling
+# one realisation many times.
+early, _ = sampled(OscillatingWind(amplitude_deg=12.0, period_s=200.0, phase_s=0.0), seconds=200)
+later, _ = sampled(OscillatingWind(amplitude_deg=12.0, period_s=200.0, phase_s=50.0), seconds=200)
+check("phase_s gives a genuinely different realisation",
+      max(abs(a - b) for a, b in zip(early, later)) > 5.0)
+
+trend, _ = sampled(PersistentShift(start_direction=0.0, rate_deg_per_min=3.0), seconds=600)
+check("a persistent shift trends instead of oscillating",
+      all(trend[i] >= trend[i - 1] - 1e-9 for i in range(1, len(trend))) and trend[-1] > 25.0,
+      f"ended at {trend[-1]:.1f}°")
 
 # --- manoeuvre cost, against the user's own numbers --------------------------
 group("manoeuvre cost (calibrated to supplied light/medium/heavy profile)")

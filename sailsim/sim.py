@@ -339,19 +339,27 @@ class Simulator:
                 # it more expensive in a breeze, exactly as on the water.
                 if b.penalty_remaining_s > 0.0:
                     b.penalty_remaining_s -= self.dt
+                    turning = b.penalty_turned_deg < rules_mod.PENALTY_DEGREES
+                    if turning:
+                        b.penalty_turned_deg += b.max_turn_rate_deg_s * self.dt
                     # RRS 44.1: a boat taking a penalty shall keep well clear. It
                     # spins, but it also sails off to leeward out of the traffic
                     # rather than turning circles in the middle of the fleet, which
-                    # is what produced cascading fouls.
+                    # is what produced cascading fouls. A One-Turn Penalty is 360
+                    # degrees, so the spin crosses head to wind once and dead
+                    # downwind once -- one tack and one gybe, as rule 44.2 requires.
                     b.speed_cap_kt = b.target_speed_kt(tws, wdir) * 0.5
                     spin = geo.wrap360(b.heading + b.max_turn_rate_deg_s * self.dt)
                     clear_away = geo.wrap360(wdir + 180.0)
                     b.step(
-                        spin if b.penalty_remaining_s > 6.0 else clear_away,
+                        # Spin until the circle is complete, then sail clear. The
+                        # tail is additional time, so the 360 degrees always happens.
+                        spin if turning else clear_away,
                         tws, wdir, self.dt,
                     )
                     if b.penalty_remaining_s <= 0.0:
                         b.penalties_taken += 1
+                        b.penalty_turned_deg = 0.0
                     if recording:
                         b.record(t, deficit)
                     continue

@@ -109,12 +109,19 @@ measuring what the start is worth.
 RRS Part 2, the right-of-way core: **rule 10** (port keeps clear of starboard),
 **11** (windward keeps clear of leeward), **12** (clear astern keeps clear),
 **13** (tacking), **14** (avoid contact, binding *both* boats), **18** (mark-room
-on a three-length zone) and **44** (the two-turns penalty), plus the definitions
+on a three-length zone) and **44** (the One-Turn Penalty), plus the definitions
 they rest on — clear astern, overlap, windward/leeward, the zone.
 
-A penalty is 720° of turning at the boat's own turn rate, so it costs 24 s for a
-quick-turning boat and 48 s for a slow one — more expensive in a breeze, as on the
-water.
+A penalty is a **One-Turn Penalty**: one tack and one gybe, i.e. 360° of turning.
+Turning through a full circle necessarily crosses head to wind once and dead
+downwind once, so the spin *is* a tack and a gybe with nothing extra to model. One
+turn rather than two because that is what this racing uses — on short college
+courses a 720 is disproportionate, and the sailing instructions reduce rule 44.1.
+
+Cost is the boat's own turn rate, plus 4 s sailing clear (rule 44.1: get well
+clear): **16 s** for a quick-turning boat, **28 s** for a slow one. More expensive
+in a breeze, as on the water. The simulator counts **degrees turned**, not elapsed
+seconds, so the circle always completes.
 
 **Not implemented, and each changes real outcomes:** rules 15 (acquiring right of
 way), **17 (proper course — the rule that constrains the leebow, and the most
@@ -276,6 +283,9 @@ Domain knowledge lives in `tests/test_core.py` as assertions rather than comment
   low to measure, or the model's recovery is too cheap: a boat barely over sails
   back a few metres and rejoins, where the real cost is losing your lane and
   having the fleet roll over you. An earlier version asserted it on one race.
+* **The wind actually oscillates** — measured along a boat's track, not read off
+  the constructor: full amplitude, undamped, right period, speed moving on a
+  different period from direction, and `phase_s` giving a genuinely different race.
 * **Right of way** — every determination above, in explicit geometry, plus
   precedence (rule 10 outranks overlap; rule 13 outranks rule 11).
 * **Rounding** — that the gate and the side test agree for every mark on the
@@ -320,6 +330,11 @@ Domain knowledge lives in `tests/test_core.py` as assertions rather than comment
   is only true when nothing can intervene; switching rules on by default duly made
   things intervene and broke assertions that were right about physics and silent
   about their assumptions. Each now sets its own world explicitly.
+* **A penalty that was never sailed.** The "get clear" tail was carved out of the
+  penalty's own duration, so boats peeled away partway round and turned 240° of the
+  required 360° — and 576° of 720° back when it was a two-turns penalty. It looked
+  right in every result. The tail is now additional time, and the spin counts
+  degrees turned rather than trusting a clock, which was still a timestep short.
 * **Half the fleet rounding marks backwards.** Rounding was a bare distance test,
   so boats passed whichever side they arrived on — exactly 9 of 18 each way, which
   means boats meeting head on at the buoy. It survived five test suites and was

@@ -15,7 +15,7 @@ simulator actually produces, plus the definitions they rest on:
     Rule 13  while tacking -- past head to wind, keep clear until close-hauled
     Rule 14  avoid contact
     Rule 18  mark-room, on a three-hull-length zone
-    Rule 44  the two-turns penalty
+    Rule 44  the One-Turn Penalty (one tack and one gybe)
 
 WHAT IS NOT, stated plainly because a half-implemented rulebook that does not say
 so is worse than none. Each of these changes real tactical outcomes:
@@ -56,11 +56,34 @@ from .boat import Boat
 # to it. Definitions, RRS.
 ZONE_LENGTHS = 3.0
 
-# Rule 44.2: a two-turns penalty is two tacks and two gybes in the same direction,
-# so 720 degrees of turning. Its cost is not a fixed number of seconds here -- it
-# is however long 720 degrees takes at the boat's own turn rate, which makes it
-# more expensive in a breeze, exactly as it is on the water.
-PENALTY_DEGREES = 720.0
+# Rule 44.2: a One-Turn Penalty is ONE tack and ONE gybe in the same direction, so
+# 360 degrees of turning. Turning through a full circle necessarily crosses head to
+# wind once and dead downwind once, so spinning 360 degrees IS a tack and a gybe --
+# nothing extra needs modelling to make that true.
+#
+# One turn rather than two because that is what the racing being modelled uses.
+# College fleet racing runs short courses where a 720 is a disproportionate
+# penalty, and the sailing instructions reduce rule 44.1 accordingly. An earlier
+# version charged 720 degrees, which at a 24 deg/s turn rate cost about 30 seconds
+# -- roughly a fifth of a beat, and enough that a single foul decided a race.
+#
+# The cost is not a fixed number of seconds: it is however long 360 degrees takes
+# at the boat's own turn rate, which makes it more expensive in a breeze, exactly
+# as it is on the water.
+PENALTY_DEGREES = 360.0
+
+# Seconds spent sailing clear of the fleet AFTER completing the turn. Rule 44.1
+# requires a boat taking a penalty to get well clear, and without it boats spin in
+# the middle of the traffic and set off cascading fouls.
+#
+# It is ADDITIONAL to the turn, not carved out of it. An earlier version spent the
+# tail inside the penalty's own duration, so the boat peeled away partway through
+# and never completed its circle -- 240 of the required 360 degrees, and 576 of 720
+# back when it was a two-turns penalty. The penalty looked right in the results and
+# was never actually sailed. The simulator now counts DEGREES TURNED rather than
+# elapsed seconds, because even with the tail moved outside, inferring the turn
+# from a clock lost a timestep to rounding and left the boat short of the circle.
+PENALTY_CLEAR_S = 4.0
 
 
 @dataclass(frozen=True)
@@ -341,6 +364,11 @@ def separation_heading(give_way: Boat, row: Boat) -> float:
     return geo.bearing(row.x, row.y, give_way.x, give_way.y)
 
 
-def penalty_seconds(b: Boat) -> float:
-    """How long a two-turns penalty costs this boat, from its own turn rate."""
+def penalty_turn_seconds(b: Boat) -> float:
+    """Time to turn the full 360 degrees, from this boat's own turn rate."""
     return PENALTY_DEGREES / max(b.max_turn_rate_deg_s, 1.0)
+
+
+def penalty_seconds(b: Boat) -> float:
+    """Total cost of a One-Turn Penalty: the circle, then getting clear."""
+    return penalty_turn_seconds(b) + PENALTY_CLEAR_S
