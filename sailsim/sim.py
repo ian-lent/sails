@@ -263,13 +263,22 @@ class Simulator:
                 b.speed_kt = full_kt * rng.uniform(0.4, 0.9)
 
                 target = plans[b.boat_id].target_point(pin, line_boat)
-                # Scatter the fleet below the line, roughly a sequence's run away.
+                # Set up DOWN THE APPROACH, not straight downwind.
+                #
+                # A boat closing the line close-hauled on starboard is also sailing
+                # sideways: over a 60 m run to windward it covers about 50 m to the
+                # left. Backing the fleet straight down the wind axis therefore
+                # delivered every boat 40-70 m to leeward of the spot it was aiming
+                # for, which the replay showed instantly as a fleet starting off the
+                # pin end of the line entirely. Real crews set up to leeward and
+                # behind and reach up; this backs them along the reciprocal of the
+                # course they will actually sail.
                 # Bunched rather than strung out: by the last ninety seconds a fleet
                 # is jockeying near the line, not spread over a minute of sailing.
                 back = rng.uniform(0.30, 0.60) * self.prestart_s * geo.ms(full_kt)
-                rad = math.radians(wdir0)
-                b.x = target[0] - math.sin(rad) * back + rng.gauss(0.0, 8.0)
-                b.y = target[1] - math.cos(rad) * back + rng.gauss(0.0, 8.0)
+                rad = math.radians(geo.wrap360(b.heading + 180.0))
+                b.x = target[0] + math.sin(rad) * back + rng.gauss(0.0, 8.0)
+                b.y = target[1] + math.cos(rad) * back + rng.gauss(0.0, 8.0)
         else:
             # Control case: everyone on the line at speed, no sequence.
             for b in boats:
@@ -322,7 +331,7 @@ class Simulator:
                     b.speed_cap_kt = cap
                     b.step(heading, tws, wdir, self.dt)
                     if recording:
-                        b.record(t)
+                        b.record(t, deficit)
                     continue
 
                 # A boat spinning a two-turns penalty is doing nothing else. The
@@ -344,7 +353,7 @@ class Simulator:
                     if b.penalty_remaining_s <= 0.0:
                         b.penalties_taken += 1
                     if recording:
-                        b.record(t)
+                        b.record(t, deficit)
                     continue
 
                 b.speed_cap_kt = None
@@ -359,7 +368,7 @@ class Simulator:
                         heading = geo.wrap360(math.degrees(math.atan2(-math.sin(rad), -math.cos(rad))))
                         b.step(heading, tws, wdir, self.dt)
                         if recording:
-                            b.record(t)
+                            b.record(t, deficit)
                         continue
 
                 mark = self.course.target_mark(b)
@@ -381,7 +390,7 @@ class Simulator:
                 b.step(heading, tws, wdir, self.dt)
                 self.course.update_progress(b, t)
                 if recording:
-                    b.record(t)
+                    b.record(t, deficit)
             # No sequence means no gun and no OCS: boats were placed on the line
             # at speed, so flagging them over would be an artefact of the setup.
             if not gun_checked and t >= 0.0 and plans:

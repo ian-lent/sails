@@ -10,6 +10,8 @@ venue. **Nothing here is calibrated to real data yet** — see Provenance.
     python3 tests/test_rules.py       # right of way, mark-room, penalties
     python3 tests/test_policy.py      # the tactical helm
     python3 experiments/shift_threshold.py   # when is a shift worth a tack?
+    python3 make_replay.py                   # writes out/replay.json
+    # then open replay/index.html and load that file
     python3 plot_shadow.py            # draw the disturbance field
     python3 run_demo.py               # 18 boats, oscillating wind, writes a plot
     python3 run_demo.py uniform 12    # steady 12 kt
@@ -27,6 +29,8 @@ venue. **Nothing here is calibrated to real data yet** — see Provenance.
 | `start.py` | Line bias, the pre-start approach, and being over early. |
 | `rules.py` | RRS Part 2: right of way, mark-room, contact, penalties. |
 | `policy.py` | The tactical helm: tacks on shifts, works to keep its air clear. |
+| `replay.py` | Export a finished race as JSON for the browser replay. |
+| `replay/index.html` | The replay viewer. No dependencies, no build step, one file. |
 | `course.py` | Marks, legs, splits, and `Helm` — the policy layer that gets replaced. |
 | `sim.py` | The fleet loop. Takes a `helm_factory` so policies can be swapped. |
 
@@ -178,6 +182,40 @@ same comparison gave **+0.35 ± 0.61** — indistinguishable from zero, because 
 policy was tacking away its own gains. One condition took it from noise to a solid
 effect.
 
+## Watching a race
+
+```
+python3 make_replay.py                  # 18 boats, oscillating 8 kt -> out/replay.json
+python3 make_replay.py --baseline       # the blind helm, for comparison
+python3 make_replay.py --wind uniform --kt 14 --bias 12
+```
+
+Then open `replay/index.html` and load the file. It is a **file picker, not a
+fetch**: browsers block `fetch()` on `file://`, so a page that auto-loaded its data
+would only work behind a web server. This one works by double-clicking it, and the
+file never leaves your machine.
+
+Play/pause (or space), scrub, 1×–16×, arrow keys to step. Boats are drawn as hulls
+pointing where they are going, coloured **green on starboard and red on port** —
+the colours already in a sailor's head — or by dirty air, or by finishing position.
+Purple is a boat spinning a penalty; an amber ring is a boat returning after being
+over early. Click a boat for its tack, TWA, speed, leg and wind deficit.
+
+The viewer reads `frame_fields` from the file rather than assuming the frame
+layout, and refuses a schema it does not know, so an old file cannot silently
+render as boats sailing backwards. A two-lap race at 1 s resolution is about 1 MB.
+
+Two bugs the replay caught within a minute of first rendering, both invisible in
+every test and plot up to that point:
+
+* **The whole fleet started 40–70 m to leeward of the pin.** Boats were set up
+  straight downwind of their target, but a close-hauled approach also travels
+  sideways — about 50 m left over a 60 m run to windward. Real crews set up to
+  leeward and behind and reach up; the fleet now backs down the reciprocal of the
+  course it will actually sail.
+* Mark labels stacked illegibly, because a two-lap course rounds the same buoy
+  twice and the marks share coordinates.
+
 ## Calibration encoded as tests
 
 Domain knowledge lives in `tests/test_core.py` as assertions rather than comments:
@@ -192,6 +230,11 @@ Domain knowledge lives in `tests/test_core.py` as assertions rather than comment
   is the upwind one, that the advantage matches `L·sin(θ)`, and that a wind shift
   can reverse which end is favoured.
 * **The favoured end pays**, with a margin rather than a bare inequality.
+* **Not asserted, deliberately:** that being over early costs places. Measured
+  across 12 races it is −0.17 ± 1.10 (n=9) — nothing. Either the OCS rate is too
+  low to measure, or the model's recovery is too cheap: a boat barely over sails
+  back a few metres and rejoins, where the real cost is losing your lane and
+  having the fleet roll over you. An earlier version asserted it on one race.
 * **Right of way** — every determination above, in explicit geometry, plus
   precedence (rule 10 outranks overlap; rule 13 outranks rule 11).
 * **The shift-threshold curve** — that ignoring shifts is expensive and that a

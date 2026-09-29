@@ -170,13 +170,25 @@ over = [b for b in fleet if b.ocs]
 clear = [b for b in fleet if not b.ocs]
 check("boats over the line were flagged", len(over) > 0)
 check("every OCS boat returned below the line before racing", all(not b.returning for b in over))
+# REPORTED, NOT ASSERTED, and the reason is worth recording. An earlier version
+# asserted that being over early costs places, on the strength of a single race
+# where OCS boats averaged 13th against 7.6th. Measured properly -- 12 races, all
+# the OCS boats there are -- the gap is -0.17 +/- 1.10 places: nothing, at n=9.
+#
+# Two things could explain that and they need different fixes. The rate is low, so
+# the sample is thin. And the model's OCS recovery is probably too cheap: a boat
+# barely over sails back a few metres and rejoins, whereas the real cost of being
+# over is losing your lane and having the fleet roll over you, which nothing here
+# represents. Asserting a penalty the model does not actually impose would hide
+# that, so this reports the number and the README carries the caveat.
 if over and clear:
     ranks = {bid: i for i, (bid, _, _) in enumerate(result.order)}
     mean_over = sum(ranks[b.boat_id] for b in over) / len(over)
     mean_clear = sum(ranks[b.boat_id] for b in clear) / len(clear)
-    print(f"      mean finish rank: OCS {mean_over:.1f} vs clear {mean_clear:.1f}")
-    check("being over early costs places", mean_over > mean_clear,
-          f"OCS {mean_over:.1f} vs clear {mean_clear:.1f}")
+    print(f"      mean finish rank: OCS {mean_over:.1f} (n={len(over)}) vs "
+          f"clear {mean_clear:.1f} (n={len(clear)}) — see README, not asserted")
+check("OCS boats rejoin the race rather than being stranded",
+      all(b.finished_at is not None for b in over) or not over)
 
 # --- the control case --------------------------------------------------------
 group("control: no starting sequence")

@@ -171,7 +171,10 @@ class Boat:
     # 18-boat race reported nearly eight thousand collisions.
     contact_cooldown_s: float = 0.0
     distance_sailed_m: float = 0.0
-    track: list[tuple[float, float, float]] = field(default_factory=list)
+    # (t, x, y, heading, speed_kt, wind deficit, flags, leg). Tuples rather than
+    # objects because an 18-boat race at 1 s resolution is ~24,000 of them and the
+    # replay file has to stay small enough to open.
+    track: list[tuple] = field(default_factory=list)
 
     @property
     def length_m(self) -> float:
@@ -249,5 +252,32 @@ class Boat:
         self.x, self.y = geo.step_position(self.x, self.y, self.heading, geo.ms(effective), dt)
         self.distance_sailed_m += geo.ms(effective) * dt
 
-    def record(self, t: float) -> None:
-        self.track.append((t, self.x, self.y))
+    def record(self, t: float, deficit: float = 0.0) -> None:
+        """Snapshot for the replay.
+
+        Position alone makes a replay of moving dots. Heading, speed, tack, lane
+        quality and penalty state are what let someone watch a race and diagnose
+        it: why that boat stalled, which side of the shift it was on, whether the
+        pile-up at the mark looks like sailing or like a modelling artefact.
+        """
+        flags = 0
+        if self.returning:
+            flags |= 1
+        if self.penalty_remaining_s > 0.0:
+            flags |= 2
+        if self.finished_at is not None:
+            flags |= 4
+        if self.ocs:
+            flags |= 8
+        self.track.append(
+            (
+                round(t, 1),
+                round(self.x, 1),
+                round(self.y, 1),
+                round(self.heading, 1),
+                round(self.speed_kt, 2),
+                round(deficit, 3),
+                flags,
+                self.leg,
+            )
+        )
